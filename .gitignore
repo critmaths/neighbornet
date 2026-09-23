@@ -1,0 +1,19 @@
+# JetBrains Rider & IntelliJ
+.idea/
+*.iml
+*.iws
+
+# Visual Studio Code
+.vscode/
+
+# Build artifacts & caches
+target/
+build/
+.dart_tool/
+.packages
+pubspec.lock
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
