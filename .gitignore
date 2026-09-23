@@ -1,0 +1,10 @@
+target/
+**/target/
+build/
+**/build/
+.dart_tool/
+**/.dart_tool/
+.idea/
+**/.idea/
+*.pdb
+*.lock

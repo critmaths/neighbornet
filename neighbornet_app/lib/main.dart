@@ -1,0 +1,207 @@
+import 'package:flutter/material.dart';
+import 'state/neighbornet_state.dart';
+import 'views/chat_view.dart';
+import 'views/bulletin_view.dart';
+import 'views/people_view.dart';
+import 'views/emergency_view.dart';
+import 'views/settings_view.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final state = NeighborNetState();
+  await state.initialize();
+  runApp(NeighborNetApp(state: state));
+}
+
+class NeighborNetApp extends StatelessWidget {
+  final NeighborNetState state;
+
+  const NeighborNetApp({super.key, required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'NeighborNet',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1B5E20), // Resilient forest green
+          brightness: Brightness.light,
+        ),
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF2E7D32),
+          brightness: Brightness.dark,
+        ),
+      ),
+      themeMode: ThemeMode.system,
+      home: MainShell(state: state),
+    );
+  }
+}
+
+class MainShell extends StatefulWidget {
+  final NeighborNetState state;
+
+  const MainShell({super.key, required this.state});
+
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends State<MainShell> {
+  int _selectedIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.state,
+      builder: (context, _) {
+        final peersCount = widget.state.nearbyCount;
+        final hasPeers = peersCount > 0;
+
+        return Scaffold(
+          body: Row(
+            children: [
+              // Left Navigation Rail
+              NavigationRail(
+                selectedIndex: _selectedIndex,
+                onDestinationSelected: (int index) {
+                  setState(() {
+                    _selectedIndex = index;
+                  });
+                },
+                extended: true,
+                minExtendedWidth: 230,
+                leading: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.hub_rounded, color: Colors.white, size: 22),
+                          ),
+                          const SizedBox(width: 10),
+                          const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'NeighborNet',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                'Community Mesh',
+                                style: TextStyle(fontSize: 11, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Live Nearby Status Pill
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: (hasPeers ? Colors.green : Colors.amber).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: (hasPeers ? Colors.green : Colors.amber).withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: hasPeers ? Colors.green : Colors.amber,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              hasPeers
+                                  ? '$peersCount nearby participant${peersCount == 1 ? '' : 's'}'
+                                  : 'Searching local mesh...',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: hasPeers ? Colors.green.shade800 : Colors.amber.shade900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                destinations: const [
+                  NavigationRailDestination(
+                    icon: Icon(Icons.chat_bubble_outline),
+                    selectedIcon: Icon(Icons.chat_bubble),
+                    label: Text('Chat'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.campaign_outlined),
+                    selectedIcon: Icon(Icons.campaign),
+                    label: Text('Bulletin'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.people_outline),
+                    selectedIcon: Icon(Icons.people),
+                    label: Text('People & Nodes'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.shield_outlined),
+                    selectedIcon: Icon(Icons.shield, color: Colors.red),
+                    label: Text('Emergency Mode'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.settings_outlined),
+                    selectedIcon: Icon(Icons.settings),
+                    label: Text('Settings'),
+                  ),
+                ],
+              ),
+
+              const VerticalDivider(thickness: 1, width: 1),
+
+              // Content Area
+              Expanded(
+                child: _buildCurrentView(),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCurrentView() {
+    switch (_selectedIndex) {
+      case 0:
+        return ChatView(state: widget.state);
+      case 1:
+        return BulletinView(state: widget.state);
+      case 2:
+        return PeopleView(state: widget.state);
+      case 3:
+        return EmergencyView(state: widget.state);
+      case 4:
+        return SettingsView(state: widget.state);
+      default:
+        return ChatView(state: widget.state);
+    }
+  }
+}
