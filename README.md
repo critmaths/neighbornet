@@ -97,14 +97,6 @@ flutter test
 This project is licensed under the [MIT License](LICENSE).
 
 ## Care To Donate?
-
-<script async
-  src="https://js.stripe.com/v3/buy-button.js">
-</script>
-
-<stripe-buy-button
-  buy-button-id="buy_btn_1UJ5rtLDCe49tIs9PA4pkJa8"
-  publishable-key="pk_live_51UGLSwLDCe49tIs9uMa1M5Yo88i5QjoOZJEG5lhUFq4Flq4FwswvKJPkj50rIslzCcCJXZZL16IyNxDepJZsUdrJ00kyKhJWFK"
->
-</stripe-buy-button>
-https://buy.stripe.com/eVq8wQcma4RCctIgsf2Ji04
+<a href="https://buy.stripe.com/eVq8wQcma4RCctIgsf2Ji04" target="_blank">
+  <img width="541" height="181" alt="Donate-Button" src="https://github.com/user-attachments/assets/653907f6-d82e-4c0c-82e1-dc8d1e508fe3" />
+</a>
