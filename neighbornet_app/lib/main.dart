@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'state/neighbornet_state.dart';
 import 'views/chat_view.dart';
 import 'views/bulletin_view.dart';
-import 'views/files_view.dart';
 import 'views/people_view.dart';
 import 'views/emergency_view.dart';
 import 'views/settings_view.dart';
@@ -159,11 +158,6 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Bulletin'),
                   ),
                   NavigationRailDestination(
-                    icon: Icon(Icons.folder_shared_outlined),
-                    selectedIcon: Icon(Icons.folder_shared),
-                    label: Text('Shared Files'),
-                  ),
-                  NavigationRailDestination(
                     icon: Icon(Icons.people_outline),
                     selectedIcon: Icon(Icons.people),
                     label: Text('People & Nodes'),
@@ -201,12 +195,10 @@ class _MainShellState extends State<MainShell> {
       case 1:
         return BulletinView(state: widget.state);
       case 2:
-        return FilesView(state: widget.state);
-      case 3:
         return PeopleView(state: widget.state);
-      case 4:
+      case 3:
         return EmergencyView(state: widget.state);
-      case 5:
+      case 4:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

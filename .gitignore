@@ -12,6 +12,13 @@ build/
 .dart_tool/
 .packages
 pubspec.lock
+*.dll
+*.so
+*.dylib
+
+# Local Node Test Data
+data_node_*/
+neighbornet_data*/
 
 # OS Files
 .DS_Store
