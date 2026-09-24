@@ -45,6 +45,8 @@ jobs:
 
       - name: Flutter Unit & Widget Tests
         run: flutter test
+        env:
+          NEIGHBORNET_CORE_LIB: ${{ github.workspace }}/neighbornet_core/target/release/neighbornet_core.dll
         working-directory: neighbornet_app
 
       - name: Build Flutter Windows Desktop (Release)
@@ -101,6 +103,8 @@ jobs:
         run: |
           flutter pub get
           flutter test
+        env:
+          NEIGHBORNET_CORE_LIB: ${{ github.workspace }}/neighbornet_core/target/release/libneighbornet_core.so
         working-directory: neighbornet_app
 
       - name: Build Flutter Linux Desktop (Release)
@@ -192,6 +196,8 @@ jobs:
         run: |
           flutter pub get
           flutter test
+        env:
+          NEIGHBORNET_CORE_LIB: ${{ github.workspace }}/neighbornet_core/target/release/libneighbornet_core.dylib
         working-directory: neighbornet_app
 
       - name: Build Flutter macOS Desktop (Release)
