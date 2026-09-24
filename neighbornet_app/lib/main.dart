@@ -156,11 +156,19 @@ class _MainShellState extends State<MainShell> {
                     ],
                   ),
                 ),
-                destinations: const [
+                destinations: [
                   NavigationRailDestination(
-                    icon: Icon(Icons.chat_bubble_outline),
-                    selectedIcon: Icon(Icons.chat_bubble),
-                    label: Text('Chat'),
+                    icon: Badge(
+                      isLabelVisible: widget.state.totalUnreadCount > 0,
+                      label: Text('${widget.state.totalUnreadCount}'),
+                      child: const Icon(Icons.chat_bubble_outline),
+                    ),
+                    selectedIcon: Badge(
+                      isLabelVisible: widget.state.totalUnreadCount > 0,
+                      label: Text('${widget.state.totalUnreadCount}'),
+                      child: const Icon(Icons.chat_bubble),
+                    ),
+                    label: const Text('Chat'),
                   ),
                   NavigationRailDestination(
                     icon: Icon(Icons.campaign_outlined),

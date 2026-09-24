@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/neighbornet_models.dart';
 import '../state/neighbornet_state.dart';
@@ -23,6 +24,51 @@ class _ChatViewState extends State<ChatView> {
     {'id': 'buysell', 'label': 'Buy / Sell / Trade', 'icon': Icons.storefront_outlined},
     {'id': 'technical', 'label': 'Technical', 'icon': Icons.terminal_outlined},
   ];
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  Future<void> _attachFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles();
+      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+        final pickedFile = result.files.single;
+        final hash = widget.state.publishFile(
+          pickedFile.path!,
+          'Shared in #${widget.state.currentChannel}',
+        );
+
+        if (hash != null) {
+          final sizeStr = _formatBytes(pickedFile.size);
+          widget.state.sendChatMessage(
+            '📎 [Shared File] ${pickedFile.name} ($sizeStr) • Hash: $hash',
+          );
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('File "${pickedFile.name}" published to mesh!'),
+                backgroundColor: Colors.teal,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error selecting file: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
 
   void _sendMessage() {
     final text = _msgController.text.trim();
@@ -521,6 +567,7 @@ class _ChatViewState extends State<ChatView> {
                       ..._channels.map((ch) {
                         final isSelected = widget.state.currentChannel == ch['id'];
                         final color = ch['color'] as Color? ?? Theme.of(context).colorScheme.primary;
+                        final unread = widget.state.getUnreadCount(ch['id'] as String);
 
                         return ListTile(
                           dense: true,
@@ -539,6 +586,23 @@ class _ChatViewState extends State<ChatView> {
                               color: isSelected ? Theme.of(context).colorScheme.onSecondaryContainer : null,
                             ),
                           ),
+                          trailing: unread > 0
+                              ? Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.error,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '$unread',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                )
+                              : null,
                           onTap: () {
                             widget.state.selectChannel(ch['id'] as String);
                           },
@@ -560,6 +624,8 @@ class _ChatViewState extends State<ChatView> {
                         ),
                         ...rooms.map((r) {
                           final isSelected = widget.state.currentChannel == r.id;
+                          final unread = widget.state.getUnreadCount(r.id);
+
                           return ListTile(
                             dense: true,
                             selected: isSelected,
@@ -576,9 +642,32 @@ class _ChatViewState extends State<ChatView> {
                                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                               ),
                             ),
-                            trailing: Text(
-                              '${r.stewards.length}👑',
-                              style: const TextStyle(fontSize: 11, color: Colors.grey),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (unread > 0) ...[
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.error,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      '$unread',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                ],
+                                Text(
+                                  '${r.stewards.length}👑',
+                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                ),
+                              ],
                             ),
                             onTap: () {
                               widget.state.selectChannel(r.id);
@@ -715,15 +804,7 @@ class _ChatViewState extends State<ChatView> {
                                     ],
                                   ),
                                   const SizedBox(height: 4),
-                                  SelectableText(
-                                    msg.content,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: isMe
-                                          ? Theme.of(context).colorScheme.onPrimaryContainer
-                                          : Theme.of(context).colorScheme.onSurface,
-                                    ),
-                                  ),
+                                  _buildMessageContent(context, msg, isMe),
                                 ],
                               ),
                             ),
@@ -745,6 +826,12 @@ class _ChatViewState extends State<ChatView> {
                 ),
                 child: Row(
                   children: [
+                    IconButton(
+                      icon: const Icon(Icons.attach_file_rounded),
+                      tooltip: 'Attach & Publish File to Mesh',
+                      onPressed: _attachFile,
+                    ),
+                    const SizedBox(width: 4),
                     Expanded(
                       child: TextField(
                         controller: _msgController,
@@ -773,6 +860,98 @@ class _ChatViewState extends State<ChatView> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildMessageContent(BuildContext context, ChatMessage msg, bool isMe) {
+    if (msg.content.startsWith('📎 [Shared File]')) {
+      final raw = msg.content.substring('📎 [Shared File]'.length).trim();
+      final parts = raw.split(' • ');
+      final fileInfo = parts.isNotEmpty ? parts[0] : 'File Attachment';
+      final hashPart = parts.length > 1 ? parts.last.replaceAll('Hash: ', '').trim() : '';
+
+      final isCompleted = hashPart.isNotEmpty && widget.state.getCompletedFilePath(hashPart) != null;
+
+      return Container(
+        margin: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isMe
+              ? Colors.white.withValues(alpha: 0.15)
+              : Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.insert_drive_file_outlined, color: Colors.teal, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fileInfo,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      if (hashPart.isNotEmpty)
+                        Text(
+                          'Hash: ${hashPart.length > 16 ? "${hashPart.substring(0, 16)}..." : hashPart}',
+                          style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.grey),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                  icon: Icon(isCompleted ? Icons.check_circle_outline : Icons.download_rounded, size: 16),
+                  label: Text(isCompleted ? 'File Ready' : 'Replicate Chunks (8KB)'),
+                  onPressed: hashPart.isEmpty
+                      ? null
+                      : () {
+                          widget.state.requestFileDownload(hashPart);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Requesting 8KB file chunks for $fileInfo across mesh...'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    return SelectableText(
+      msg.content,
+      style: TextStyle(
+        fontSize: 14,
+        color: isMe
+            ? Theme.of(context).colorScheme.onPrimaryContainer
+            : Theme.of(context).colorScheme.onSurface,
+      ),
     );
   }
 }
