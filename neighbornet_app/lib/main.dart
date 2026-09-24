@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'services/tray_and_window_service.dart';
 import 'state/neighbornet_state.dart';
 import 'views/chat_view.dart';
 import 'views/bulletin_view.dart';
@@ -8,6 +9,7 @@ import 'views/settings_view.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await TrayAndWindowService.instance.initialize();
   final state = NeighborNetState();
   await state.initialize();
   runApp(NeighborNetApp(state: state));

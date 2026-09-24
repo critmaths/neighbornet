@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../services/tray_and_window_service.dart';
 import '../state/neighbornet_state.dart';
 
 class SettingsView extends StatefulWidget {
@@ -126,6 +127,104 @@ class _SettingsViewState extends State<SettingsView> {
                 ],
               ),
             ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Desktop & System Tray Settings Card
+          ListenableBuilder(
+            listenable: TrayAndWindowService.instance,
+            builder: (context, _) {
+              final trayService = TrayAndWindowService.instance;
+
+              return Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.desktop_windows_outlined, color: Theme.of(context).colorScheme.primary),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Desktop & System Tray Options',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Control window minimization and close behavior so NeighborNet can keep Reticulum mesh routing active in the background.',
+                        style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Quick Action Button
+                      Row(
+                        children: [
+                          FilledButton.icon(
+                            icon: const Icon(Icons.arrow_downward_rounded, size: 18),
+                            label: const Text('Minimize to System Tray'),
+                            onPressed: () {
+                              trayService.minimizeToTray();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('NeighborNet minimized to tray. Reticulum node continues running in the background.'),
+                                  duration: Duration(seconds: 3),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 8),
+
+                      // Option 1: Minimize Just to Tray
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text(
+                          'Minimize Just to Tray',
+                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        subtitle: const Text(
+                          'When minimizing the window, hide completely from the taskbar into the system tray. Default: shows on taskbar AND in the system tray when app is running.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        value: trayService.minimizeToTrayOnly,
+                        onChanged: (val) {
+                          trayService.setMinimizeToTrayOnly(val);
+                        },
+                      ),
+
+                      // Option 2: Send to Tray on Close (X)
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text(
+                          'Send to Tray When Closing (X)',
+                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        subtitle: const Text(
+                          'When clicking the window close button (X), send the app to the system tray instead of exiting, ensuring the community mesh remains alive.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        value: trayService.closeToTray,
+                        onChanged: (val) {
+                          trayService.setCloseToTray(val);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
 
           const SizedBox(height: 20),
