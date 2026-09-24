@@ -90,27 +90,13 @@ class NeighborNetBridge {
   void _loadLibrary() {
     if (_dylib != null) return;
 
-    final cwd = Directory.current.path;
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-
     final candidatePaths = <String>[
       if (Platform.environment.containsKey('NEIGHBORNET_CORE_LIB'))
         Platform.environment['NEIGHBORNET_CORE_LIB']!,
-      '$exeDir${Platform.pathSeparator}neighbornet_core.dll',
-      '$exeDir${Platform.pathSeparator}libneighbornet_core.so',
-      '$exeDir${Platform.pathSeparator}libneighbornet_core.dylib',
-      '$cwd/../neighbornet_core/target/release/neighbornet_core.dll',
-      '$cwd/../neighbornet_core/target/release/libneighbornet_core.so',
-      '$cwd/../neighbornet_core/target/release/libneighbornet_core.dylib',
-      '$cwd/../neighbornet_core/target/debug/neighbornet_core.dll',
-      '$cwd/../neighbornet_core/target/debug/libneighbornet_core.so',
-      '$cwd/../neighbornet_core/target/debug/libneighbornet_core.dylib',
-      '$cwd/neighbornet_core/target/release/neighbornet_core.dll',
-      '$cwd/neighbornet_core/target/release/libneighbornet_core.so',
-      '$cwd/neighbornet_core/target/release/libneighbornet_core.dylib',
+      '${File(Platform.resolvedExecutable).parent.path}${Platform.pathSeparator}neighbornet_core.dll',
       r'C:\Users\criti\RiderProjects\Neighbornet\neighbornet_core\target\release\neighbornet_core.dll',
       r'C:\Users\criti\RiderProjects\Neighbornet\neighbornet_core\target\debug\neighbornet_core.dll',
-      'neighbornet_core.dll',
+      r'neighbornet_core.dll',
       'libneighbornet_core.dylib',
       'libneighbornet_core.so',
     ];
