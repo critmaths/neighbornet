@@ -581,7 +581,6 @@ dependencies = [
 name = "neighbornet_core"
 version = "0.1.0"
 dependencies = [
- "base64",
  "chrono",
  "hex",
  "parking_lot",

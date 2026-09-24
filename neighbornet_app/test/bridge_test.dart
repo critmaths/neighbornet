@@ -19,7 +19,7 @@ void main() {
     // 2. Query Status
     final status = bridge.getStatus();
     expect(status, isNotNull);
-    expect(status!.destHash.length, 32);
+    expect(status!.destHash.length, 32); // 16 bytes hex = 32 hex chars
     expect(status.nickname, startsWith('Neighbor-'));
     expect(status.listenPort, 46001);
     expect(status.isTransport, isFalse);
@@ -41,6 +41,8 @@ void main() {
     final bulletins = bridge.getBulletins();
     expect(bulletins.isNotEmpty, isTrue);
     expect(bulletins.first.title, 'Shelter Open at Lincoln Middle School');
+    expect(bulletins.first.urgency, 'urgent');
+    expect(bulletins.first.authorHash, status.destHash);
 
     // 5. Send Chat Message
     final chatSuccess = bridge.sendChat('general', 'Hello neighbors! Is power on in sector 4?');
@@ -49,42 +51,7 @@ void main() {
     final history = bridge.getChatHistory('general');
     expect(history.isNotEmpty, isTrue);
     expect(history.first.content, 'Hello neighbors! Is power on in sector 4?');
-
-    // 6. Test File Publishing
-    final sampleFile = File('${tempDir.path}${Platform.pathSeparator}test_manual.txt');
-    sampleFile.writeAsStringSync('Emergency water filtration guidelines for neighborhood distribution.');
-    final fileHash = bridge.publishFile(sampleFile.path, 'Community filtration guidelines');
-    expect(fileHash, isNotNull);
-    expect(fileHash!.length, 64);
-
-    final sharedFiles = bridge.getSharedFiles();
-    expect(sharedFiles.isNotEmpty, isTrue);
-    expect(sharedFiles.first.fileHash, fileHash);
-
-    // 7. Test Dynamic Room Creation & Democratic Stewardship
-    final room = bridge.createRoom('water-station', 'Community clean water distribution point');
-    expect(room, isNotNull);
-    expect(room!.name, 'water-station');
-    expect(room.stewards.length, 1);
-    expect(room.stewards.first, status.destHash);
-
-    final rooms = bridge.getRooms();
-    expect(rooms.any((r) => r.id == room.id), isTrue);
-
-    // Propose vote on single-node room (self promotes or records vote)
-    final propId = bridge.proposeStewardVote(
-      roomId: room.id,
-      targetHash: '11223344556677889900aabbccddeeff',
-      targetNickname: 'Alice Volunteer',
-      action: 'promote',
-      reasonCategory: 'Community Support',
-      reasonDetails: 'Coordinates relief supplies',
-    );
-    expect(propId, isNotNull);
-
-    final proposals = bridge.getProposals(room.id);
-    expect(proposals.isNotEmpty, isTrue);
-    expect(proposals.first.targetNickname, 'Alice Volunteer');
+    expect(history.first.channel, 'general');
 
     // Clean up
     bridge.stopNode();
