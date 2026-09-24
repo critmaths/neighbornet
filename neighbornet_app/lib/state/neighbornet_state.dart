@@ -250,6 +250,22 @@ class NeighborNetState extends ChangeNotifier {
     return success;
   }
 
+  String? exportIdentityMnemonic() {
+    return _bridge.exportIdentityMnemonic();
+  }
+
+  Future<bool> restoreIdentity(String phraseOrHex) async {
+    final newHash = _bridge.restoreIdentity(phraseOrHex);
+    if (newHash != null && newHash.isNotEmpty) {
+      _seenMessageIds.clear();
+      _seenBulletinIds.clear();
+      _refreshState();
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
   void _refreshState() {
     if (!_bridge.isReady) return;
 

@@ -960,6 +960,65 @@ impl NeighborNode {
 
         Ok(())
     }
+
+    /// Export the node's cryptographic identity as a 48-word BIP-39 mnemonic seed phrase.
+    pub fn export_identity_mnemonic(&self) -> Result<String, String> {
+        let key_path = self.inner.data_dir.join("identity.hex");
+        let content = fs::read_to_string(&key_path).map_err(|e| format!("Failed to read identity file: {e}"))?;
+        let trimmed = content.trim();
+        let priv_bytes = hex::decode(trimmed).map_err(|e| format!("Invalid hex identity: {e}"))?;
+        if priv_bytes.len() < 64 {
+            return Err("Identity private key bytes invalid length".to_string());
+        }
+        let part1 = &priv_bytes[..32];
+        let part2 = &priv_bytes[32..64];
+        let m1 = bip39::Mnemonic::from_entropy(part1).map_err(|e| format!("{e}"))?;
+        let m2 = bip39::Mnemonic::from_entropy(part2).map_err(|e| format!("{e}"))?;
+        Ok(format!("{} {}", m1, m2))
+    }
+
+    /// Restore or import a cryptographic identity from a BIP-39 mnemonic phrase or raw hex string.
+    /// Writes the new identity to identity.hex on disk.
+    pub fn restore_identity(&self, phrase_or_hex: &str) -> Result<String, String> {
+        let trimmed = phrase_or_hex.trim();
+        let bytes = if trimmed.contains(' ') {
+            // Mnemonic words
+            let words: Vec<&str> = trimmed.split_whitespace().collect();
+            if words.len() == 48 {
+                let w1 = words[..24].join(" ");
+                let w2 = words[24..].join(" ");
+                let m1 = bip39::Mnemonic::parse_normalized(&w1).map_err(|e| format!("Invalid phrase part 1: {e}"))?;
+                let m2 = bip39::Mnemonic::parse_normalized(&w2).map_err(|e| format!("Invalid phrase part 2: {e}"))?;
+                let mut b = Vec::with_capacity(64);
+                b.extend_from_slice(&m1.to_entropy());
+                b.extend_from_slice(&m2.to_entropy());
+                b
+            } else if words.len() == 24 {
+                let m = bip39::Mnemonic::parse_normalized(trimmed).map_err(|e| format!("Invalid 24-word phrase: {e}"))?;
+                let mut b = Vec::with_capacity(64);
+                b.extend_from_slice(&m.to_entropy());
+                b.extend_from_slice(&m.to_entropy());
+                b
+            } else {
+                return Err(format!("Expected 48 BIP-39 words or 128-char hex string, got {} words", words.len()));
+            }
+        } else {
+            // Raw hex string
+            hex::decode(trimmed).map_err(|e| format!("Invalid hex string: {e}"))?
+        };
+
+        let hex_str = hex::encode(&bytes);
+        let identity = PrivateIdentity::new_from_hex_string(&hex_str)
+            .map_err(|e| format!("Invalid identity key bytes: {e:?}"))?;
+
+        let hash_hex = hex::encode(identity.as_address_hash_slice());
+
+        // Save to identity.hex
+        let key_path = self.inner.data_dir.join("identity.hex");
+        fs::write(&key_path, &hex_str).map_err(|e| format!("Failed to write identity file: {e}"))?;
+
+        Ok(hash_hex)
+    }
 }
 
 fn start_network_threads(inner: Arc<NodeInner>, socket: UdpSocket) {
@@ -1765,5 +1824,38 @@ pub extern "C" fn neighbornet_panic_wipe() -> bool {
         node.panic_wipe().is_ok()
     } else {
         false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_export_identity_mnemonic() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.export_identity_mnemonic() {
+        Ok(phrase) => to_c_string(phrase),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_restore_identity(phrase_or_hex_c: *const c_char) -> *mut c_char {
+    if phrase_or_hex_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let input = unsafe { CStr::from_ptr(phrase_or_hex_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.restore_identity(&input) {
+        Ok(new_hash) => to_c_string(new_hash),
+        Err(_) => std::ptr::null_mut(),
     }
 }

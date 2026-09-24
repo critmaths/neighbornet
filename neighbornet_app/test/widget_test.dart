@@ -54,10 +54,12 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Node & Network Settings'), findsOneWidget);
+    expect(find.text('View 48-Word Paper Key'), findsOneWidget);
+    expect(find.text('Import / Restore Identity'), findsOneWidget);
     expect(find.text('Tactical Visual Profile'), findsOneWidget);
 
     // Scroll down in Settings
-    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.drag(find.byType(ListView), const Offset(0, -900));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Duress Protocol / Panic Wipe'), findsOneWidget);
     expect(find.text('EXECUTE PANIC WIPE'), findsOneWidget);

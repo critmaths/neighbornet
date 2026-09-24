@@ -57,6 +57,12 @@ typedef _DartGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _NativePanicWipe = Bool Function();
 typedef _DartPanicWipe = bool Function();
 
+typedef _NativeExportMnemonic = Pointer<Utf8> Function();
+typedef _DartExportMnemonic = Pointer<Utf8> Function();
+
+typedef _NativeRestoreIdentity = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DartRestoreIdentity = Pointer<Utf8> Function(Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -88,6 +94,8 @@ class NeighborNetBridge {
   late _DartGetRoomData _getProposalsJson;
   late _DartGetRoomData _getAuditLogJson;
   late _DartPanicWipe _panicWipe;
+  late _DartExportMnemonic _exportMnemonic;
+  late _DartRestoreIdentity _restoreIdentity;
 
   bool get isReady => _isInitialized;
 
@@ -146,6 +154,8 @@ class NeighborNetBridge {
     _getProposalsJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_proposals_json');
     _getAuditLogJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_audit_log_json');
     _panicWipe = _dylib!.lookupFunction<_NativePanicWipe, _DartPanicWipe>('neighbornet_panic_wipe');
+    _exportMnemonic = _dylib!.lookupFunction<_NativeExportMnemonic, _DartExportMnemonic>('neighbornet_export_identity_mnemonic');
+    _restoreIdentity = _dylib!.lookupFunction<_NativeRestoreIdentity, _DartRestoreIdentity>('neighbornet_restore_identity');
   }
 
   bool panicWipe() {
@@ -153,6 +163,33 @@ class NeighborNetBridge {
       return _panicWipe();
     }
     return false;
+  }
+
+  String? exportIdentityMnemonic() {
+    if (!_isInitialized) return null;
+    final ptr = _exportMnemonic();
+    if (ptr == nullptr) return null;
+    try {
+      return ptr.toDartString();
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  String? restoreIdentity(String phraseOrHex) {
+    if (!_isInitialized) return null;
+    final inputPtr = phraseOrHex.toNativeUtf8();
+    try {
+      final ptr = _restoreIdentity(inputPtr);
+      if (ptr == nullptr) return null;
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(inputPtr);
+    }
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
