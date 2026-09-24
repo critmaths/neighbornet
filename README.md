@@ -89,17 +89,7 @@ cargo test
 # Run Flutter FFI bridge and UI tests
 cd ../neighbornet_app
 flutter test
-```
-
-<script async
-  src="https://js.stripe.com/v3/buy-button.js">
-</script>
-
-<stripe-buy-button
-  buy-button-id="buy_btn_1UJ5rtLDCe49tIs9PA4pkJa8"
-  publishable-key="pk_live_51UGLSwLDCe49tIs9uMa1M5Yo88i5QjoOZJEG5lhUFq4Flq4FwswvKJPkj50rIslzCcCJXZZL16IyNxDepJZsUdrJ00kyKhJWFK"
->
-</stripe-buy-button>
+``
 
 ---
 
