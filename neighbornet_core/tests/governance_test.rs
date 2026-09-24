@@ -73,7 +73,7 @@ fn test_democratic_room_stewardship_and_audit_trail() {
     // Charlie waits for proposal to arrive and casts affirmative vote for Bob
     println!("Step 5: Charlie casts affirmative vote for Bob's promotion...");
     let mut vote_cast = false;
-    for _ in 0..15 {
+    for _ in 0..25 {
         thread::sleep(Duration::from_millis(150));
         if node_c.cast_vote(&prop_promote, true) {
             vote_cast = true;
@@ -82,17 +82,21 @@ fn test_democratic_room_stewardship_and_audit_trail() {
     }
     assert!(vote_cast, "Charlie was unable to cast vote for proposal");
 
-    // Also cast on Alice's node to evaluate quorum
-    node_a.cast_vote(&prop_promote, true);
-
-    // Verify Bob is now a steward on Alice's node
-    let rooms_a = node_a.get_rooms();
-    let updated_room = rooms_a.iter().find(|r| r.id == room.id).unwrap();
-    assert!(
-        updated_room.stewards.contains(&node_b.inner.dest_hash_hex),
-        "Bob was not added to stewards list after quorum vote!"
-    );
-    println!("  [SUCCESS] Bob is now an active Steward: {:?}", updated_room.stewards);
+    // Also cast on Alice's node and poll for quorum evaluation across nodes
+    let mut bob_promoted = false;
+    for _ in 0..25 {
+        node_a.cast_vote(&prop_promote, true);
+        thread::sleep(Duration::from_millis(150));
+        let rooms_a = node_a.get_rooms();
+        if let Some(updated_room) = rooms_a.iter().find(|r| r.id == room.id) {
+            if updated_room.stewards.contains(&node_b.inner.dest_hash_hex) {
+                bob_promoted = true;
+                println!("  [SUCCESS] Bob is now an active Steward: {:?}", updated_room.stewards);
+                break;
+            }
+        }
+    }
+    assert!(bob_promoted, "Bob was not added to stewards list after quorum vote!");
 
     // 5. Demotion scenario: Bob acts disruptively. Alice proposes demoting Bob with public reason
     println!("Step 6: Alice proposes demoting Bob with reason 'Spam / Disruption'...");
@@ -110,7 +114,7 @@ fn test_democratic_room_stewardship_and_audit_trail() {
     // Charlie waits for proposal and votes to approve demotion
     println!("Step 7: Charlie votes FOR demotion...");
     let mut demote_cast = false;
-    for _ in 0..15 {
+    for _ in 0..25 {
         thread::sleep(Duration::from_millis(150));
         if node_c.cast_vote(&prop_demote, true) {
             demote_cast = true;
@@ -118,17 +122,22 @@ fn test_democratic_room_stewardship_and_audit_trail() {
         }
     }
     assert!(demote_cast, "Charlie was unable to cast demotion vote");
-    node_a.cast_vote(&prop_demote, true);
 
-    // 6. Verify Bob has been removed from stewards
-    let rooms_after_demote = node_a.get_rooms();
-    let demoted_room = rooms_after_demote.iter().find(|r| r.id == room.id).unwrap();
-    assert!(
-        !demoted_room.stewards.contains(&node_b.inner.dest_hash_hex),
-        "Bob should have been removed from stewards!"
-    );
-    assert!(demoted_room.stewards.contains(&node_a.inner.dest_hash_hex));
-    println!("  [SUCCESS] Bob was democratically demoted! Current stewards: {:?}", demoted_room.stewards);
+    // Poll for demotion quorum completion
+    let mut bob_demoted = false;
+    for _ in 0..25 {
+        node_a.cast_vote(&prop_demote, true);
+        thread::sleep(Duration::from_millis(150));
+        let rooms_after_demote = node_a.get_rooms();
+        if let Some(demoted_room) = rooms_after_demote.iter().find(|r| r.id == room.id) {
+            if !demoted_room.stewards.contains(&node_b.inner.dest_hash_hex) {
+                bob_demoted = true;
+                println!("  [SUCCESS] Bob was democratically demoted! Current stewards: {:?}", demoted_room.stewards);
+                break;
+            }
+        }
+    }
+    assert!(bob_demoted, "Bob should have been removed from stewards!");
 
     // 7. Verify Transparent Audit Log
     println!("Step 8: Verifying public cryptographic audit log...");

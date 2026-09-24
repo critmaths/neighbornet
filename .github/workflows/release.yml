@@ -43,6 +43,10 @@ jobs:
         run: flutter pub get
         working-directory: neighbornet_app
 
+      - name: Copy Rust DLL for Flutter Tests
+        shell: pwsh
+        run: Copy-Item neighbornet_core/target/release/neighbornet_core.dll neighbornet_app/ -Force
+
       - name: Flutter Unit & Widget Tests
         run: flutter test
         working-directory: neighbornet_app
@@ -99,9 +103,12 @@ jobs:
 
       - name: Flutter Dependencies & Tests
         run: |
+          cp neighbornet_core/target/release/libneighbornet_core.so neighbornet_app/
+          sudo cp neighbornet_core/target/release/libneighbornet_core.so /usr/local/lib/
+          sudo ldconfig
+          cd neighbornet_app
           flutter pub get
           flutter test
-        working-directory: neighbornet_app
 
       - name: Build Flutter Linux Desktop (Release)
         run: flutter build linux --release
@@ -190,9 +197,11 @@ jobs:
 
       - name: Flutter Dependencies & Tests
         run: |
+          cp neighbornet_core/target/release/libneighbornet_core.dylib neighbornet_app/
+          sudo cp neighbornet_core/target/release/libneighbornet_core.dylib /usr/local/lib/ || true
+          cd neighbornet_app
           flutter pub get
           flutter test
-        working-directory: neighbornet_app
 
       - name: Build Flutter macOS Desktop (Release)
         run: flutter build macos --release
