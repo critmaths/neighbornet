@@ -89,8 +89,7 @@ cargo test
 # Run Flutter FFI bridge and UI tests
 cd ../neighbornet_app
 flutter test
-``
-
+```
 ---
 
 ## 📄 License
