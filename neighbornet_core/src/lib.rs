@@ -9,11 +9,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::prelude::*;
 use parking_lot::RwLock;
 use rand_core::OsRng;
 use reticulum_rs::core::identity::{HashIdentity, PrivateIdentity};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+pub const FILE_CHUNK_SIZE: usize = 8192; // 8 KB content-addressed chunks
 
 // --- DATA STRUCTURES ---
 
@@ -47,6 +50,60 @@ pub struct BulletinPost {
     pub timestamp_sec: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SharedFileMeta {
+    pub file_hash: String,
+    pub filename: String,
+    pub file_size: u64,
+    pub chunk_count: usize,
+    pub chunk_size: usize,
+    pub description: String,
+    pub author_hash: String,
+    pub author_nickname: String,
+    pub timestamp_sec: u64,
+    pub is_complete: bool,
+}
+
+// --- GOVERNANCE & ROOM STRUCTURES ---
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct RoomMeta {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub creator_hash: String,
+    pub creator_nickname: String,
+    pub created_sec: u64,
+    pub is_private: bool,
+    pub stewards: Vec<String>, // list of destination hashes
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct StewardVote {
+    pub proposal_id: String,
+    pub room_id: String,
+    pub target_hash: String,
+    pub target_nickname: String,
+    pub action: String, // "promote" or "demote"
+    pub reason_category: String, // "Inactivity", "Spam / Disruption", "Misinformation", "Abuse of Power", "Other"
+    pub reason_details: String,
+    pub proposer_hash: String,
+    pub proposer_nickname: String,
+    pub votes_for: Vec<String>,
+    pub votes_against: Vec<String>,
+    pub status: String, // "pending", "passed", "rejected"
+    pub created_sec: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct GovernanceEvent {
+    pub event_id: String,
+    pub room_id: String,
+    pub summary: String,
+    pub reason: String,
+    pub timestamp_sec: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "kind")]
 pub enum WireEnvelope {
@@ -55,15 +112,39 @@ pub enum WireEnvelope {
         nickname: String,
         is_transport: bool,
         bulletin_count: usize,
+        file_count: usize,
+        room_count: usize,
     },
     Chat(ChatMessage),
     Bulletin(BulletinPost),
     SyncRequest {
         known_bulletin_ids: Vec<String>,
+        known_file_hashes: Vec<String>,
+        known_room_ids: Vec<String>,
     },
     SyncResponse {
         bulletins: Vec<BulletinPost>,
+        files: Vec<SharedFileMeta>,
+        rooms: Vec<RoomMeta>,
     },
+    FileAnnounce(SharedFileMeta),
+    FileChunkRequest {
+        file_hash: String,
+        chunk_index: usize,
+    },
+    FileChunkResponse {
+        file_hash: String,
+        chunk_index: usize,
+        chunk_data_base64: String,
+    },
+    RoomAnnounce(RoomMeta),
+    VoteProposal(StewardVote),
+    VoteBallot {
+        proposal_id: String,
+        voter_hash: String,
+        approve: bool,
+    },
+    GovernanceEventBroadcast(GovernanceEvent),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -74,6 +155,8 @@ pub struct NodeStatus {
     pub is_transport: bool,
     pub peer_count: usize,
     pub bulletin_count: usize,
+    pub file_count: usize,
+    pub room_count: usize,
     pub uptime_sec: u64,
 }
 
@@ -88,6 +171,10 @@ pub struct NodeInner {
     pub peers: RwLock<HashMap<String, PeerInfo>>,
     pub messages: RwLock<Vec<ChatMessage>>,
     pub bulletins: RwLock<HashMap<String, BulletinPost>>,
+    pub files: RwLock<HashMap<String, SharedFileMeta>>,
+    pub rooms: RwLock<HashMap<String, RoomMeta>>,
+    pub proposals: RwLock<HashMap<String, StewardVote>>,
+    pub audit_log: RwLock<HashMap<String, Vec<GovernanceEvent>>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -121,11 +208,8 @@ fn load_or_create_identity(data_dir: &Path) -> (PrivateIdentity, String) {
         }
     }
 
-    // Generate new cryptographic identity via Reticulum-rs
     let identity = PrivateIdentity::new_from_rand(OsRng);
     let hash_hex = hex::encode(identity.as_address_hash_slice());
-    
-    // Persist private key
     let hex_str = hex::encode(identity.to_private_key_bytes());
     let _ = fs::write(key_path, hex_str);
 
@@ -135,6 +219,12 @@ fn load_or_create_identity(data_dir: &Path) -> (PrivateIdentity, String) {
 impl NeighborNode {
     pub fn new(data_dir: PathBuf, listen_port: u16, is_transport: bool) -> Result<Self, String> {
         let _ = fs::create_dir_all(&data_dir);
+        let _ = fs::create_dir_all(data_dir.join("files").join("meta"));
+        let _ = fs::create_dir_all(data_dir.join("files").join("chunks"));
+        let _ = fs::create_dir_all(data_dir.join("files").join("completed"));
+        let _ = fs::create_dir_all(data_dir.join("rooms"));
+        let _ = fs::create_dir_all(data_dir.join("governance"));
+
         let (_, dest_hash_hex) = load_or_create_identity(&data_dir);
 
         let bind_addr = format!("0.0.0.0:{}", listen_port);
@@ -151,6 +241,43 @@ impl NeighborNode {
 
         let default_nick = format!("Neighbor-{}", &dest_hash_hex[..4]);
         let socket_clone = socket.try_clone().map_err(|e| format!("Clone socket failed: {e}"))?;
+
+        // Load existing saved files
+        let mut loaded_files = HashMap::new();
+        let meta_dir = data_dir.join("files").join("meta");
+        if let Ok(entries) = fs::read_dir(&meta_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("json") {
+                    if let Ok(content) = fs::read_to_string(entry.path()) {
+                        if let Ok(mut meta) = serde_json::from_str::<SharedFileMeta>(&content) {
+                            let comp_path = data_dir
+                                .join("files")
+                                .join("completed")
+                                .join(&meta.file_hash)
+                                .join(&meta.filename);
+                            meta.is_complete = comp_path.exists();
+                            loaded_files.insert(meta.file_hash.clone(), meta);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Load existing rooms
+        let mut loaded_rooms = HashMap::new();
+        let rooms_dir = data_dir.join("rooms");
+        if let Ok(entries) = fs::read_dir(&rooms_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("json") {
+                    if let Ok(content) = fs::read_to_string(entry.path()) {
+                        if let Ok(room) = serde_json::from_str::<RoomMeta>(&content) {
+                            loaded_rooms.insert(room.id.clone(), room);
+                        }
+                    }
+                }
+            }
+        }
+
         let inner = Arc::new(NodeInner {
             dest_hash_hex,
             nickname: RwLock::new(default_nick),
@@ -160,6 +287,10 @@ impl NeighborNode {
             peers: RwLock::new(HashMap::new()),
             messages: RwLock::new(Vec::new()),
             bulletins: RwLock::new(HashMap::new()),
+            files: RwLock::new(loaded_files),
+            rooms: RwLock::new(loaded_rooms),
+            proposals: RwLock::new(HashMap::new()),
+            audit_log: RwLock::new(HashMap::new()),
             seen_ids: RwLock::new(HashSet::new()),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -183,6 +314,8 @@ impl NeighborNode {
             is_transport: self.inner.is_transport,
             peer_count: self.inner.peers.read().len(),
             bulletin_count: self.inner.bulletins.read().len(),
+            file_count: self.inner.files.read().len(),
+            room_count: self.inner.rooms.read().len(),
             uptime_sec: self.inner.start_time.elapsed().as_secs(),
         }
     }
@@ -209,19 +342,8 @@ impl NeighborNode {
         self.inner.seen_ids.write().insert(id.clone());
         self.inner.bulletins.write().insert(id.clone(), post.clone());
 
-        // Broadcast to network from bound socket
         let envelope = WireEnvelope::Bulletin(post);
-        if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = self.inner.socket.send_to(json.as_bytes(), "255.255.255.255:42424");
-            let _ = self.inner.socket.send_to(json.as_bytes(), "127.0.0.1:42424");
-            let peer_addrs: Vec<String> = self.inner.peers.read().values().map(|p| p.addr.clone()).collect();
-            for addr in peer_addrs {
-                if let Ok(dest) = addr.parse::<SocketAddr>() {
-                    let _ = self.inner.socket.send_to(json.as_bytes(), dest);
-                }
-            }
-        }
-
+        self.broadcast_envelope(&envelope);
         id
     }
 
@@ -243,17 +365,7 @@ impl NeighborNode {
         self.inner.messages.write().push(chat.clone());
 
         let envelope = WireEnvelope::Chat(chat);
-        if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = self.inner.socket.send_to(json.as_bytes(), "255.255.255.255:42424");
-            let _ = self.inner.socket.send_to(json.as_bytes(), "127.0.0.1:42424");
-            let peer_addrs: Vec<String> = self.inner.peers.read().values().map(|p| p.addr.clone()).collect();
-            for addr in peer_addrs {
-                if let Ok(dest) = addr.parse::<SocketAddr>() {
-                    let _ = self.inner.socket.send_to(json.as_bytes(), dest);
-                }
-            }
-        }
-
+        self.broadcast_envelope(&envelope);
         id
     }
 
@@ -279,15 +391,363 @@ impl NeighborNode {
 
     pub fn connect_peer(&self, addr: SocketAddr) {
         let b_count = self.inner.bulletins.read().len();
+        let f_count = self.inner.files.read().len();
+        let r_count = self.inner.rooms.read().len();
         let announce = WireEnvelope::Announce {
             dest_hash: self.inner.dest_hash_hex.clone(),
             nickname: self.inner.nickname.read().clone(),
             is_transport: self.inner.is_transport,
             bulletin_count: b_count,
+            file_count: f_count,
+            room_count: r_count,
         };
         if let Ok(payload) = serde_json::to_string(&announce) {
             let _ = self.inner.socket.send_to(payload.as_bytes(), addr);
         }
+    }
+
+    pub fn broadcast_envelope(&self, envelope: &WireEnvelope) {
+        if let Ok(json) = serde_json::to_string(envelope) {
+            let _ = self.inner.socket.send_to(json.as_bytes(), "255.255.255.255:42424");
+            let _ = self.inner.socket.send_to(json.as_bytes(), "127.0.0.1:42424");
+            let peer_addrs: Vec<String> = self.inner.peers.read().values().map(|p| p.addr.clone()).collect();
+            for addr in peer_addrs {
+                if let Ok(dest) = addr.parse::<SocketAddr>() {
+                    let _ = self.inner.socket.send_to(json.as_bytes(), dest);
+                }
+            }
+        }
+    }
+
+    // --- DECENTRALIZED FILE SHARING SUBSYSTEM ---
+
+    pub fn publish_file(&self, src_path: &Path, description: String) -> Result<String, String> {
+        if !src_path.exists() {
+            return Err("File not found on local filesystem".to_string());
+        }
+
+        let file_bytes = fs::read(src_path).map_err(|e| format!("Failed to read file: {e}"))?;
+        let file_size = file_bytes.len() as u64;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&file_bytes);
+        let file_hash = hex::encode(hasher.finalize());
+
+        let filename = src_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("document")
+            .to_string();
+
+        let chunk_count = if file_bytes.is_empty() {
+            1
+        } else {
+            (file_bytes.len() + FILE_CHUNK_SIZE - 1) / FILE_CHUNK_SIZE
+        };
+
+        let comp_dir = self.inner.data_dir.join("files").join("completed").join(&file_hash);
+        let _ = fs::create_dir_all(&comp_dir);
+        let comp_path = comp_dir.join(&filename);
+        let _ = fs::write(&comp_path, &file_bytes);
+
+        let chunk_dir = self.inner.data_dir.join("files").join("chunks").join(&file_hash);
+        let _ = fs::create_dir_all(&chunk_dir);
+        if file_bytes.is_empty() {
+            let _ = fs::write(chunk_dir.join("0"), b"");
+        } else {
+            for (idx, chunk) in file_bytes.chunks(FILE_CHUNK_SIZE).enumerate() {
+                let _ = fs::write(chunk_dir.join(idx.to_string()), chunk);
+            }
+        }
+
+        let meta = SharedFileMeta {
+            file_hash: file_hash.clone(),
+            filename,
+            file_size,
+            chunk_count,
+            chunk_size: FILE_CHUNK_SIZE,
+            description,
+            author_hash: self.inner.dest_hash_hex.clone(),
+            author_nickname: self.inner.nickname.read().clone(),
+            timestamp_sec: current_epoch_sec(),
+            is_complete: true,
+        };
+
+        let meta_dir = self.inner.data_dir.join("files").join("meta");
+        let _ = fs::create_dir_all(&meta_dir);
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = fs::write(meta_dir.join(format!("{}.json", file_hash)), json);
+        }
+
+        self.inner.files.write().insert(file_hash.clone(), meta.clone());
+
+        let envelope = WireEnvelope::FileAnnounce(meta);
+        self.broadcast_envelope(&envelope);
+
+        Ok(file_hash)
+    }
+
+    pub fn get_shared_files(&self) -> Vec<SharedFileMeta> {
+        let mut list: Vec<SharedFileMeta> = self.inner.files.read().values().cloned().collect();
+        list.sort_by(|a, b| b.timestamp_sec.cmp(&a.timestamp_sec));
+        list
+    }
+
+    pub fn request_file(&self, file_hash: &str) -> bool {
+        let files_guard = self.inner.files.read();
+        let meta = match files_guard.get(file_hash) {
+            Some(m) => m.clone(),
+            None => return false,
+        };
+        drop(files_guard);
+
+        if meta.is_complete {
+            return true;
+        }
+
+        let chunk_dir = self.inner.data_dir.join("files").join("chunks").join(file_hash);
+        for idx in 0..meta.chunk_count {
+            let chunk_path = chunk_dir.join(idx.to_string());
+            if !chunk_path.exists() {
+                let req = WireEnvelope::FileChunkRequest {
+                    file_hash: file_hash.to_string(),
+                    chunk_index: idx,
+                };
+                self.broadcast_envelope(&req);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn get_completed_file_path(&self, file_hash: &str) -> Option<PathBuf> {
+        let files_guard = self.inner.files.read();
+        let meta = files_guard.get(file_hash)?;
+        if !meta.is_complete {
+            return None;
+        }
+
+        let comp_path = self
+            .inner
+            .data_dir
+            .join("files")
+            .join("completed")
+            .join(file_hash)
+            .join(&meta.filename);
+
+        if comp_path.exists() {
+            Some(comp_path)
+        } else {
+            None
+        }
+    }
+
+    // --- DYNAMIC ROOMS & DEMOCRATIC GOVERNANCE SUBSYSTEM ---
+
+    pub fn create_room(&self, name: String, description: String, is_private: bool) -> RoomMeta {
+        let timestamp = current_epoch_sec();
+        let raw_id = format!("{}:{}:{}", self.inner.dest_hash_hex, name, timestamp);
+        let id = format!("room_{}", &compute_hash(&raw_id)[..16]);
+
+        let room = RoomMeta {
+            id: id.clone(),
+            name,
+            description,
+            creator_hash: self.inner.dest_hash_hex.clone(),
+            creator_nickname: self.inner.nickname.read().clone(),
+            created_sec: timestamp,
+            is_private,
+            stewards: vec![self.inner.dest_hash_hex.clone()], // Creator is genesis steward
+        };
+
+        // Persist room
+        let rooms_dir = self.inner.data_dir.join("rooms");
+        let _ = fs::create_dir_all(&rooms_dir);
+        if let Ok(json) = serde_json::to_string_pretty(&room) {
+            let _ = fs::write(rooms_dir.join(format!("{}.json", id)), json);
+        }
+
+        self.inner.rooms.write().insert(id.clone(), room.clone());
+
+        // Broadcast room creation
+        let envelope = WireEnvelope::RoomAnnounce(room.clone());
+        self.broadcast_envelope(&envelope);
+
+        room
+    }
+
+    pub fn get_rooms(&self) -> Vec<RoomMeta> {
+        let mut list: Vec<RoomMeta> = self.inner.rooms.read().values().cloned().collect();
+        list.sort_by(|a, b| a.created_sec.cmp(&b.created_sec));
+        list
+    }
+
+    pub fn propose_steward_vote(
+        &self,
+        room_id: String,
+        target_hash: String,
+        target_nickname: String,
+        action: String,
+        reason_category: String,
+        reason_details: String,
+    ) -> Result<String, String> {
+        if !self.inner.rooms.read().contains_key(&room_id) {
+            return Err("Room does not exist".to_string());
+        }
+
+        let timestamp = current_epoch_sec();
+        let raw_id = format!("{}:{}:{}:{}:{}", room_id, target_hash, action, self.inner.dest_hash_hex, timestamp);
+        let proposal_id = format!("prop_{}", &compute_hash(&raw_id)[..16]);
+
+        let vote = StewardVote {
+            proposal_id: proposal_id.clone(),
+            room_id: room_id.clone(),
+            target_hash,
+            target_nickname,
+            action,
+            reason_category,
+            reason_details,
+            proposer_hash: self.inner.dest_hash_hex.clone(),
+            proposer_nickname: self.inner.nickname.read().clone(),
+            votes_for: vec![self.inner.dest_hash_hex.clone()], // Proposer votes FOR automatically
+            votes_against: Vec::new(),
+            status: "pending".to_string(),
+            created_sec: timestamp,
+        };
+
+        self.inner.proposals.write().insert(proposal_id.clone(), vote.clone());
+
+        // Evaluate immediately in case of single-member room genesis
+        self.evaluate_vote_quorum(&proposal_id);
+
+        let envelope = WireEnvelope::VoteProposal(vote);
+        self.broadcast_envelope(&envelope);
+
+        Ok(proposal_id)
+    }
+
+    pub fn cast_vote(&self, proposal_id: &str, approve: bool) -> bool {
+        let my_hash = self.inner.dest_hash_hex.clone();
+        let mut proposals = self.inner.proposals.write();
+        let vote = match proposals.get_mut(proposal_id) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if vote.status != "pending" {
+            return false;
+        }
+
+        // Avoid double voting
+        vote.votes_for.retain(|h| h != &my_hash);
+        vote.votes_against.retain(|h| h != &my_hash);
+
+        if approve {
+            vote.votes_for.push(my_hash.clone());
+        } else {
+            vote.votes_against.push(my_hash.clone());
+        }
+
+        let envelope = WireEnvelope::VoteBallot {
+            proposal_id: proposal_id.to_string(),
+            voter_hash: my_hash,
+            approve,
+        };
+        drop(proposals);
+
+        self.broadcast_envelope(&envelope);
+        self.evaluate_vote_quorum(proposal_id);
+        true
+    }
+
+    fn evaluate_vote_quorum(&self, proposal_id: &str) {
+        let mut proposals = self.inner.proposals.write();
+        let vote = match proposals.get_mut(proposal_id) {
+            Some(v) => v,
+            None => return,
+        };
+
+        if vote.status != "pending" {
+            return;
+        }
+
+        // Active community participants = connected peers + self
+        let total_nodes = self.inner.peers.read().len() + 1;
+        let required_for_majority = if total_nodes <= 1 {
+            1
+        } else if total_nodes == 2 {
+            2 // Unanimous consensus for 2 people
+        } else {
+            (total_nodes / 2) + 1 // Democratic majority
+        };
+
+        if vote.votes_for.len() >= required_for_majority {
+            vote.status = "passed".to_string();
+
+            // Execute promotion / demotion on Room
+            let mut rooms = self.inner.rooms.write();
+            if let Some(room) = rooms.get_mut(&vote.room_id) {
+                if vote.action == "promote" {
+                    if !room.stewards.contains(&vote.target_hash) {
+                        room.stewards.push(vote.target_hash.clone());
+                    }
+                } else if vote.action == "demote" {
+                    room.stewards.retain(|h| h != &vote.target_hash);
+                }
+
+                // Persist updated room
+                let rooms_dir = self.inner.data_dir.join("rooms");
+                if let Ok(json) = serde_json::to_string_pretty(&room) {
+                    let _ = fs::write(rooms_dir.join(format!("{}.json", room.id)), json);
+                }
+            }
+
+            // Create immutable Governance Audit Log Event
+            let event = GovernanceEvent {
+                event_id: format!("event_{}", &compute_hash(&format!("{}:{}", vote.proposal_id, current_epoch_sec()))[..16]),
+                room_id: vote.room_id.clone(),
+                summary: format!(
+                    "Steward {} was {} by democratic community vote ({} in favor)",
+                    vote.target_nickname,
+                    if vote.action == "promote" { "promoted" } else { "demoted" },
+                    vote.votes_for.len()
+                ),
+                reason: format!("{}: {}", vote.reason_category, vote.reason_details),
+                timestamp_sec: current_epoch_sec(),
+            };
+
+            let mut audit_log = self.inner.audit_log.write();
+            audit_log.entry(vote.room_id.clone()).or_default().push(event.clone());
+
+            let gov_env = WireEnvelope::GovernanceEventBroadcast(event);
+            drop(audit_log);
+            drop(rooms);
+            drop(proposals);
+
+            self.broadcast_envelope(&gov_env);
+        } else if vote.votes_against.len() > total_nodes.saturating_sub(required_for_majority) {
+            vote.status = "rejected".to_string();
+        }
+    }
+
+    pub fn get_proposals(&self, room_id: &str) -> Vec<StewardVote> {
+        self.inner
+            .proposals
+            .read()
+            .values()
+            .filter(|v| v.room_id == room_id)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_audit_log(&self, room_id: &str) -> Vec<GovernanceEvent> {
+        self.inner
+            .audit_log
+            .read()
+            .get(room_id)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -333,11 +793,15 @@ fn start_network_threads(inner: Arc<NodeInner>, socket: UdpSocket) {
             }
 
             let b_count = inner_tx.bulletins.read().len();
+            let f_count = inner_tx.files.read().len();
+            let r_count = inner_tx.rooms.read().len();
             let announce = WireEnvelope::Announce {
                 dest_hash: inner_tx.dest_hash_hex.clone(),
                 nickname: inner_tx.nickname.read().clone(),
                 is_transport: inner_tx.is_transport,
                 bulletin_count: b_count,
+                file_count: f_count,
+                room_count: r_count,
             };
 
             if let Ok(payload) = serde_json::to_string(&announce) {
@@ -364,6 +828,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             nickname,
             is_transport,
             bulletin_count,
+            file_count,
+            room_count,
         } => {
             if dest_hash == inner.dest_hash_hex {
                 return;
@@ -382,24 +848,34 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 },
             );
 
-            // If this peer is newly discovered, immediately respond with our own announcement
+            // Respond immediately if newly discovered peer
             if is_new {
                 let my_announce = WireEnvelope::Announce {
                     dest_hash: inner.dest_hash_hex.clone(),
                     nickname: inner.nickname.read().clone(),
                     is_transport: inner.is_transport,
                     bulletin_count: inner.bulletins.read().len(),
+                    file_count: inner.files.read().len(),
+                    room_count: inner.rooms.read().len(),
                 };
                 if let Ok(json) = serde_json::to_string(&my_announce) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
             }
 
-            // Sync missing bulletins
+            // Sync missing bulletins, file manifests, and rooms
             let my_b_count = inner.bulletins.read().len();
-            if is_new || bulletin_count > my_b_count {
-                let known_ids: Vec<String> = inner.bulletins.read().keys().cloned().collect();
-                let sync_req = WireEnvelope::SyncRequest { known_bulletin_ids: known_ids };
+            let my_f_count = inner.files.read().len();
+            let my_r_count = inner.rooms.read().len();
+            if is_new || bulletin_count > my_b_count || file_count > my_f_count || room_count > my_r_count {
+                let known_b_ids: Vec<String> = inner.bulletins.read().keys().cloned().collect();
+                let known_f_hashes: Vec<String> = inner.files.read().keys().cloned().collect();
+                let known_r_ids: Vec<String> = inner.rooms.read().keys().cloned().collect();
+                let sync_req = WireEnvelope::SyncRequest {
+                    known_bulletin_ids: known_b_ids,
+                    known_file_hashes: known_f_hashes,
+                    known_room_ids: known_r_ids,
+                };
                 if let Ok(json) = serde_json::to_string(&sync_req) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
@@ -419,30 +895,230 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 bulletins.insert(post.id.clone(), post);
             }
         }
-        WireEnvelope::SyncRequest { known_bulletin_ids } => {
-            let known_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
+        WireEnvelope::SyncRequest {
+            known_bulletin_ids,
+            known_file_hashes,
+            known_room_ids,
+        } => {
+            let known_b_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
             let missing_bulletins: Vec<BulletinPost> = inner
                 .bulletins
                 .read()
                 .values()
-                .filter(|b| !known_set.contains(&b.id))
+                .filter(|b| !known_b_set.contains(&b.id))
                 .cloned()
                 .collect();
 
-            if !missing_bulletins.is_empty() {
-                let resp = WireEnvelope::SyncResponse { bulletins: missing_bulletins };
+            let known_f_set: HashSet<String> = known_file_hashes.into_iter().collect();
+            let missing_files: Vec<SharedFileMeta> = inner
+                .files
+                .read()
+                .values()
+                .filter(|f| !known_f_set.contains(&f.file_hash))
+                .cloned()
+                .collect();
+
+            let known_r_set: HashSet<String> = known_room_ids.into_iter().collect();
+            let missing_rooms: Vec<RoomMeta> = inner
+                .rooms
+                .read()
+                .values()
+                .filter(|r| !known_r_set.contains(&r.id))
+                .cloned()
+                .collect();
+
+            if !missing_bulletins.is_empty() || !missing_files.is_empty() || !missing_rooms.is_empty() {
+                let resp = WireEnvelope::SyncResponse {
+                    bulletins: missing_bulletins,
+                    files: missing_files,
+                    rooms: missing_rooms,
+                };
                 if let Ok(json) = serde_json::to_string(&resp) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
             }
         }
-        WireEnvelope::SyncResponse { bulletins } => {
+        WireEnvelope::SyncResponse { bulletins, files, rooms } => {
             let mut seen = inner.seen_ids.write();
-            let mut stored = inner.bulletins.write();
+            let mut stored_b = inner.bulletins.write();
             for b in bulletins {
                 if seen.insert(b.id.clone()) {
-                    stored.insert(b.id.clone(), b);
+                    stored_b.insert(b.id.clone(), b);
                 }
+            }
+
+            let mut stored_f = inner.files.write();
+            for mut f in files {
+                if !stored_f.contains_key(&f.file_hash) {
+                    let comp_path = inner
+                        .data_dir
+                        .join("files")
+                        .join("completed")
+                        .join(&f.file_hash)
+                        .join(&f.filename);
+                    f.is_complete = comp_path.exists();
+
+                    let meta_dir = inner.data_dir.join("files").join("meta");
+                    let _ = fs::create_dir_all(&meta_dir);
+                    if let Ok(json) = serde_json::to_string_pretty(&f) {
+                        let _ = fs::write(meta_dir.join(format!("{}.json", f.file_hash)), json);
+                    }
+
+                    stored_f.insert(f.file_hash.clone(), f);
+                }
+            }
+
+            let mut stored_r = inner.rooms.write();
+            for r in rooms {
+                if !stored_r.contains_key(&r.id) {
+                    let rooms_dir = inner.data_dir.join("rooms");
+                    let _ = fs::create_dir_all(&rooms_dir);
+                    if let Ok(json) = serde_json::to_string_pretty(&r) {
+                        let _ = fs::write(rooms_dir.join(format!("{}.json", r.id)), json);
+                    }
+                    stored_r.insert(r.id.clone(), r);
+                }
+            }
+        }
+        WireEnvelope::FileAnnounce(mut meta) => {
+            let mut files = inner.files.write();
+            if !files.contains_key(&meta.file_hash) {
+                let comp_path = inner
+                    .data_dir
+                    .join("files")
+                    .join("completed")
+                    .join(&meta.file_hash)
+                    .join(&meta.filename);
+                meta.is_complete = comp_path.exists();
+
+                let meta_dir = inner.data_dir.join("files").join("meta");
+                let _ = fs::create_dir_all(&meta_dir);
+                if let Ok(json) = serde_json::to_string_pretty(&meta) {
+                    let _ = fs::write(meta_dir.join(format!("{}.json", meta.file_hash)), json);
+                }
+
+                files.insert(meta.file_hash.clone(), meta);
+            }
+        }
+        WireEnvelope::FileChunkRequest { file_hash, chunk_index } => {
+            let chunk_path = inner
+                .data_dir
+                .join("files")
+                .join("chunks")
+                .join(&file_hash)
+                .join(chunk_index.to_string());
+
+            if let Ok(chunk_bytes) = fs::read(&chunk_path) {
+                let b64 = BASE64_STANDARD.encode(&chunk_bytes);
+                let resp = WireEnvelope::FileChunkResponse {
+                    file_hash,
+                    chunk_index,
+                    chunk_data_base64: b64,
+                };
+                if let Ok(json) = serde_json::to_string(&resp) {
+                    let _ = socket.send_to(json.as_bytes(), src);
+                }
+            }
+        }
+        WireEnvelope::FileChunkResponse {
+            file_hash,
+            chunk_index,
+            chunk_data_base64,
+        } => {
+            if let Ok(data) = BASE64_STANDARD.decode(&chunk_data_base64) {
+                let chunk_dir = inner.data_dir.join("files").join("chunks").join(&file_hash);
+                let _ = fs::create_dir_all(&chunk_dir);
+                let chunk_path = chunk_dir.join(chunk_index.to_string());
+                let _ = fs::write(chunk_path, &data);
+
+                let meta_opt = inner.files.read().get(&file_hash).cloned();
+                if let Some(mut meta) = meta_opt {
+                    let mut missing_idx = None;
+                    for i in 0..meta.chunk_count {
+                        if !chunk_dir.join(i.to_string()).exists() {
+                            missing_idx = Some(i);
+                            break;
+                        }
+                    }
+
+                    if let Some(next_idx) = missing_idx {
+                        let req = WireEnvelope::FileChunkRequest {
+                            file_hash: file_hash.clone(),
+                            chunk_index: next_idx,
+                        };
+                        if let Ok(json) = serde_json::to_string(&req) {
+                            let _ = socket.send_to(json.as_bytes(), src);
+                        }
+                    } else {
+                        let mut full_bytes = Vec::new();
+                        for i in 0..meta.chunk_count {
+                            if let Ok(c) = fs::read(chunk_dir.join(i.to_string())) {
+                                full_bytes.extend_from_slice(&c);
+                            }
+                        }
+
+                        let mut hasher = Sha256::new();
+                        hasher.update(&full_bytes);
+                        let computed = hex::encode(hasher.finalize());
+
+                        if computed == file_hash {
+                            let comp_dir = inner.data_dir.join("files").join("completed").join(&file_hash);
+                            let _ = fs::create_dir_all(&comp_dir);
+                            let comp_path = comp_dir.join(&meta.filename);
+                            let _ = fs::write(&comp_path, &full_bytes);
+
+                            meta.is_complete = true;
+                            inner.files.write().insert(file_hash.clone(), meta.clone());
+
+                            let meta_dir = inner.data_dir.join("files").join("meta");
+                            if let Ok(json) = serde_json::to_string_pretty(&meta) {
+                                let _ = fs::write(meta_dir.join(format!("{}.json", file_hash)), json);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        WireEnvelope::RoomAnnounce(room) => {
+            let mut rooms = inner.rooms.write();
+            if !rooms.contains_key(&room.id) {
+                let rooms_dir = inner.data_dir.join("rooms");
+                let _ = fs::create_dir_all(&rooms_dir);
+                if let Ok(json) = serde_json::to_string_pretty(&room) {
+                    let _ = fs::write(rooms_dir.join(format!("{}.json", room.id)), json);
+                }
+                rooms.insert(room.id.clone(), room);
+            }
+        }
+        WireEnvelope::VoteProposal(vote) => {
+            let mut proposals = inner.proposals.write();
+            if !proposals.contains_key(&vote.proposal_id) {
+                proposals.insert(vote.proposal_id.clone(), vote);
+            }
+        }
+        WireEnvelope::VoteBallot {
+            proposal_id,
+            voter_hash,
+            approve,
+        } => {
+            let mut proposals = inner.proposals.write();
+            if let Some(vote) = proposals.get_mut(&proposal_id) {
+                if vote.status == "pending" {
+                    vote.votes_for.retain(|h| h != &voter_hash);
+                    vote.votes_against.retain(|h| h != &voter_hash);
+                    if approve {
+                        vote.votes_for.push(voter_hash);
+                    } else {
+                        vote.votes_against.push(voter_hash);
+                    }
+                }
+            }
+        }
+        WireEnvelope::GovernanceEventBroadcast(event) => {
+            let mut audit_log = inner.audit_log.write();
+            let events = audit_log.entry(event.room_id.clone()).or_default();
+            if !events.iter().any(|e| e.event_id == event.event_id) {
+                events.push(event);
             }
         }
     }
@@ -613,5 +1289,216 @@ pub extern "C" fn neighbornet_get_bulletins_json() -> *mut c_char {
 
     let posts = node.get_bulletins();
     let json = serde_json::to_string(&posts).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_publish_file(
+    file_path_c: *const c_char,
+    description_c: *const c_char,
+) -> *mut c_char {
+    if file_path_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let file_path_str = unsafe { CStr::from_ptr(file_path_c).to_string_lossy().into_owned() };
+    let desc_str = if description_c.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(description_c).to_string_lossy().into_owned() }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.publish_file(Path::new(&file_path_str), desc_str) {
+        Ok(hash) => to_c_string(hash),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_shared_files_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let files = node.get_shared_files();
+    let json = serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_request_file(file_hash_c: *const c_char) -> bool {
+    if file_hash_c.is_null() {
+        return false;
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.request_file(&hash)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_file_path(file_hash_c: *const c_char) -> *mut c_char {
+    if file_hash_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.get_completed_file_path(&hash) {
+        Some(p) => to_c_string(p.to_string_lossy().into_owned()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+// --- GOVERNANCE FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_create_room(
+    name_c: *const c_char,
+    description_c: *const c_char,
+    is_private: bool,
+) -> *mut c_char {
+    if name_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let name = unsafe { CStr::from_ptr(name_c).to_string_lossy().into_owned() };
+    let desc = if description_c.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(description_c).to_string_lossy().into_owned() }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    let room = node.create_room(name, desc, is_private);
+    let json = serde_json::to_string(&room).unwrap_or_default();
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_rooms_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let rooms = node.get_rooms();
+    let json = serde_json::to_string(&rooms).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_propose_steward_vote(
+    room_id_c: *const c_char,
+    target_hash_c: *const c_char,
+    target_nickname_c: *const c_char,
+    action_c: *const c_char,
+    reason_cat_c: *const c_char,
+    reason_det_c: *const c_char,
+) -> *mut c_char {
+    if room_id_c.is_null() || target_hash_c.is_null() || action_c.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let room_id = unsafe { CStr::from_ptr(room_id_c).to_string_lossy().into_owned() };
+    let target_hash = unsafe { CStr::from_ptr(target_hash_c).to_string_lossy().into_owned() };
+    let target_nickname = if target_nickname_c.is_null() {
+        "Neighbor".to_string()
+    } else {
+        unsafe { CStr::from_ptr(target_nickname_c).to_string_lossy().into_owned() }
+    };
+    let action = unsafe { CStr::from_ptr(action_c).to_string_lossy().into_owned() };
+    let reason_cat = if reason_cat_c.is_null() {
+        "Other".to_string()
+    } else {
+        unsafe { CStr::from_ptr(reason_cat_c).to_string_lossy().into_owned() }
+    };
+    let reason_det = if reason_det_c.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(reason_det_c).to_string_lossy().into_owned() }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.propose_steward_vote(room_id, target_hash, target_nickname, action, reason_cat, reason_det) {
+        Ok(prop_id) => to_c_string(prop_id),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_cast_vote(proposal_id_c: *const c_char, approve: bool) -> bool {
+    if proposal_id_c.is_null() {
+        return false;
+    }
+    let prop_id = unsafe { CStr::from_ptr(proposal_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.cast_vote(&prop_id, approve)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_proposals_json(room_id_c: *const c_char) -> *mut c_char {
+    if room_id_c.is_null() {
+        return to_c_string("[]".to_string());
+    }
+    let room_id = unsafe { CStr::from_ptr(room_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_proposals(&room_id);
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_audit_log_json(room_id_c: *const c_char) -> *mut c_char {
+    if room_id_c.is_null() {
+        return to_c_string("[]".to_string());
+    }
+    let room_id = unsafe { CStr::from_ptr(room_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let log = node.get_audit_log(&room_id);
+    let json = serde_json::to_string(&log).unwrap_or_else(|_| "[]".to_string());
     to_c_string(json)
 }

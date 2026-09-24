@@ -13,7 +13,10 @@ class NeighborNetState extends ChangeNotifier {
   List<PeerInfo> _peers = [];
   List<BulletinPost> _bulletins = [];
   List<SharedFileInfo> _sharedFiles = [];
+  List<RoomInfo> _rooms = [];
   final Map<String, List<ChatMessage>> _channelMessages = {};
+  final Map<String, List<StewardVoteInfo>> _roomProposals = {};
+  final Map<String, List<GovernanceEventInfo>> _roomAuditLogs = {};
 
   String _currentChannel = 'general';
   String? _errorMessage;
@@ -23,6 +26,7 @@ class NeighborNetState extends ChangeNotifier {
   List<PeerInfo> get peers => _peers;
   List<BulletinPost> get bulletins => _bulletins;
   List<SharedFileInfo> get sharedFiles => _sharedFiles;
+  List<RoomInfo> get rooms => _rooms;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -68,10 +72,17 @@ class NeighborNetState extends ChangeNotifier {
     _peers = _bridge.getPeers();
     _bulletins = _bridge.getBulletins();
     _sharedFiles = _bridge.getSharedFiles();
+    _rooms = _bridge.getRooms();
 
     // Refresh active channel messages
     final msgs = _bridge.getChatHistory(_currentChannel);
     _channelMessages[_currentChannel] = msgs;
+
+    // Refresh room governance data if in a custom room
+    if (_currentChannel.startsWith('room_')) {
+      _roomProposals[_currentChannel] = _bridge.getProposals(_currentChannel);
+      _roomAuditLogs[_currentChannel] = _bridge.getAuditLog(_currentChannel);
+    }
 
     notifyListeners();
   }
@@ -81,6 +92,10 @@ class NeighborNetState extends ChangeNotifier {
       _currentChannel = channel;
       final msgs = _bridge.getChatHistory(channel);
       _channelMessages[channel] = msgs;
+      if (channel.startsWith('room_')) {
+        _roomProposals[channel] = _bridge.getProposals(channel);
+        _roomAuditLogs[channel] = _bridge.getAuditLog(channel);
+      }
       notifyListeners();
     }
   }
@@ -137,6 +152,55 @@ class NeighborNetState extends ChangeNotifier {
 
   String? getCompletedFilePath(String fileHash) {
     return _bridge.getCompletedFilePath(fileHash);
+  }
+
+  RoomInfo? createRoom(String name, String description, {bool isPrivate = false}) {
+    final room = _bridge.createRoom(name, description, isPrivate: isPrivate);
+    if (room != null) {
+      _rooms = _bridge.getRooms();
+      selectChannel(room.id);
+    }
+    return room;
+  }
+
+  String? proposeStewardVote({
+    required String roomId,
+    required String targetHash,
+    required String targetNickname,
+    required String action,
+    required String reasonCategory,
+    required String reasonDetails,
+  }) {
+    final propId = _bridge.proposeStewardVote(
+      roomId: roomId,
+      targetHash: targetHash,
+      targetNickname: targetNickname,
+      action: action,
+      reasonCategory: reasonCategory,
+      reasonDetails: reasonDetails,
+    );
+    if (propId != null) {
+      _roomProposals[roomId] = _bridge.getProposals(roomId);
+      _roomAuditLogs[roomId] = _bridge.getAuditLog(roomId);
+      notifyListeners();
+    }
+    return propId;
+  }
+
+  bool castVote(String proposalId, bool approve) {
+    final success = _bridge.castVote(proposalId, approve);
+    if (success) {
+      _refreshState();
+    }
+    return success;
+  }
+
+  List<StewardVoteInfo> getProposals(String roomId) {
+    return _roomProposals[roomId] ?? _bridge.getProposals(roomId);
+  }
+
+  List<GovernanceEventInfo> getAuditLog(String roomId) {
+    return _roomAuditLogs[roomId] ?? _bridge.getAuditLog(roomId);
   }
 
   @override

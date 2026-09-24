@@ -38,6 +38,22 @@ typedef _DartRequestFile = bool Function(Pointer<Utf8>);
 typedef _NativeGetFilePath = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _DartGetFilePath = Pointer<Utf8> Function(Pointer<Utf8>);
 
+typedef _NativeCreateRoom = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Bool);
+typedef _DartCreateRoom = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, bool);
+
+typedef _NativeProposeVote = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+typedef _DartProposeVote = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+
+typedef _NativeCastVote = Bool Function(Pointer<Utf8>, Bool);
+typedef _DartCastVote = bool Function(Pointer<Utf8>, bool);
+
+typedef _NativeGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DartGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -61,6 +77,13 @@ class NeighborNetBridge {
   late _DartGetJson _getSharedFilesJson;
   late _DartRequestFile _requestFile;
   late _DartGetFilePath _getFilePath;
+
+  late _DartCreateRoom _createRoom;
+  late _DartGetJson _getRoomsJson;
+  late _DartProposeVote _proposeVote;
+  late _DartCastVote _castVote;
+  late _DartGetRoomData _getProposalsJson;
+  late _DartGetRoomData _getAuditLogJson;
 
   bool get isReady => _isInitialized;
 
@@ -111,6 +134,13 @@ class NeighborNetBridge {
     _getSharedFilesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_shared_files_json');
     _requestFile = _dylib!.lookupFunction<_NativeRequestFile, _DartRequestFile>('neighbornet_request_file');
     _getFilePath = _dylib!.lookupFunction<_NativeGetFilePath, _DartGetFilePath>('neighbornet_get_file_path');
+
+    _createRoom = _dylib!.lookupFunction<_NativeCreateRoom, _DartCreateRoom>('neighbornet_create_room');
+    _getRoomsJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_rooms_json');
+    _proposeVote = _dylib!.lookupFunction<_NativeProposeVote, _DartProposeVote>('neighbornet_propose_steward_vote');
+    _castVote = _dylib!.lookupFunction<_NativeCastVote, _DartCastVote>('neighbornet_cast_vote');
+    _getProposalsJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_proposals_json');
+    _getAuditLogJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_audit_log_json');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -278,6 +308,117 @@ class NeighborNetBridge {
       }
     } finally {
       calloc.free(hashPtr);
+    }
+  }
+
+  RoomInfo? createRoom(String name, String description, {bool isPrivate = false}) {
+    if (!_isInitialized) return null;
+    final namePtr = name.toNativeUtf8();
+    final descPtr = description.toNativeUtf8();
+    try {
+      final ptr = _createRoom(namePtr, descPtr, isPrivate);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        return RoomInfo.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>);
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(descPtr);
+    }
+  }
+
+  List<RoomInfo> getRooms() {
+    if (!_isInitialized) return [];
+    final ptr = _getRoomsJson();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => RoomInfo.fromJson(item as Map<String, dynamic>)).toList();
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  String? proposeStewardVote({
+    required String roomId,
+    required String targetHash,
+    required String targetNickname,
+    required String action,
+    required String reasonCategory,
+    required String reasonDetails,
+  }) {
+    if (!_isInitialized) return null;
+    final rPtr = roomId.toNativeUtf8();
+    final thPtr = targetHash.toNativeUtf8();
+    final tnPtr = targetNickname.toNativeUtf8();
+    final aPtr = action.toNativeUtf8();
+    final rcPtr = reasonCategory.toNativeUtf8();
+    final rdPtr = reasonDetails.toNativeUtf8();
+    try {
+      final ptr = _proposeVote(rPtr, thPtr, tnPtr, aPtr, rcPtr, rdPtr);
+      if (ptr == nullptr) return null;
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(rPtr);
+      calloc.free(thPtr);
+      calloc.free(tnPtr);
+      calloc.free(aPtr);
+      calloc.free(rcPtr);
+      calloc.free(rdPtr);
+    }
+  }
+
+  bool castVote(String proposalId, bool approve) {
+    if (!_isInitialized) return false;
+    final propPtr = proposalId.toNativeUtf8();
+    try {
+      return _castVote(propPtr, approve);
+    } finally {
+      calloc.free(propPtr);
+    }
+  }
+
+  List<StewardVoteInfo> getProposals(String roomId) {
+    if (!_isInitialized) return [];
+    final rPtr = roomId.toNativeUtf8();
+    try {
+      final ptr = _getProposalsJson(rPtr);
+      if (ptr == nullptr) return [];
+      try {
+        final jsonStr = ptr.toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return list.map((item) => StewardVoteInfo.fromJson(item as Map<String, dynamic>)).toList();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(rPtr);
+    }
+  }
+
+  List<GovernanceEventInfo> getAuditLog(String roomId) {
+    if (!_isInitialized) return [];
+    final rPtr = roomId.toNativeUtf8();
+    try {
+      final ptr = _getAuditLogJson(rPtr);
+      if (ptr == nullptr) return [];
+      try {
+        final jsonStr = ptr.toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return list.map((item) => GovernanceEventInfo.fromJson(item as Map<String, dynamic>)).toList();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(rPtr);
     }
   }
 }
