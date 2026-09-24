@@ -230,13 +230,11 @@ impl LoraManager {
                                                 cb(payload);
                                             }
                                         }
-                                        CMD_STAT_RESP => {
-                                            if payload.len() >= 2 {
-                                                let rssi = payload[0] as i8 as i32;
-                                                let snr = payload[1] as i8 as i32;
-                                                rssi_thread.store(rssi, Ordering::Relaxed);
-                                                snr_thread.store(snr, Ordering::Relaxed);
-                                            }
+                                        CMD_STAT_RESP if payload.len() >= 2 => {
+                                            let rssi = payload[0] as i8 as i32;
+                                            let snr = payload[1] as i8 as i32;
+                                            rssi_thread.store(rssi, Ordering::Relaxed);
+                                            snr_thread.store(snr, Ordering::Relaxed);
                                         }
                                         _ => {}
                                     }

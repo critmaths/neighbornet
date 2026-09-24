@@ -33,6 +33,10 @@ class NeighborNetState extends ChangeNotifier {
   String _currentChannel = 'general';
   String? _errorMessage;
 
+  List<SerialDeviceInfo> _serialPorts = [];
+  LoraRadioStatus? _loraStatus;
+  bool _isLoraScanning = false;
+
   bool get isInitialized => _isInitialized;
   AppThemeProfile get themeProfile => _themeProfile;
   NodeStatus? get status => _status;
@@ -42,6 +46,11 @@ class NeighborNetState extends ChangeNotifier {
   List<RoomInfo> get rooms => _rooms;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
+
+  List<SerialDeviceInfo> get serialPorts => _serialPorts;
+  LoraRadioStatus? get loraStatus => _loraStatus;
+  bool get isLoraScanning => _isLoraScanning;
+
 
   List<ChatMessage> get currentMessages => getDisplayMessages(_currentChannel);
   int get nearbyCount => _peers.length;
@@ -258,6 +267,11 @@ class NeighborNetState extends ChangeNotifier {
     _bulletins = _bridge.getBulletins();
     _sharedFiles = _bridge.getSharedFiles();
     _rooms = _bridge.getRooms();
+    final lora = _bridge.getLoraStatus();
+    if (lora != null) {
+      _loraStatus = lora;
+    }
+
 
     // Check for new bulletins
     for (final b in _bulletins) {
@@ -439,6 +453,8 @@ class NeighborNetState extends ChangeNotifier {
     return success;
   }
 
+
+
   String? publishFile(String path, String description) {
     final hash = _bridge.publishFile(path, description);
     if (hash != null) {
@@ -513,6 +529,59 @@ class NeighborNetState extends ChangeNotifier {
     }
   }
 
+  String? exportIdentityMnemonic() {
+    return _bridge.exportIdentityMnemonic();
+  }
+
+  String? restoreIdentity(String phraseOrHex) {
+    final res = _bridge.restoreIdentity(phraseOrHex);
+    if (res != null) {
+      _refreshState();
+      notifyListeners();
+    }
+    return res;
+  }
+
+  Future<void> refreshSerialPorts() async {
+    _isLoraScanning = true;
+    notifyListeners();
+    try {
+      _serialPorts = _bridge.listSerialPorts();
+    } catch (_) {}
+    _isLoraScanning = false;
+    notifyListeners();
+  }
+
+  Future<bool> connectLoraRadio({
+    required String portName,
+    int baudRate = 115200,
+    int freqHz = 915000000,
+    int bwHz = 125000,
+    int sf = 10,
+    int cr = 5,
+  }) async {
+    final ok = _bridge.connectLora(
+      portName: portName,
+      baudRate: baudRate,
+      freqHz: freqHz,
+      bwHz: bwHz,
+      sf: sf,
+      cr: cr,
+    );
+    if (ok) {
+      _loraStatus = _bridge.getLoraStatus();
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  Future<bool> disconnectLoraRadio() async {
+    final ok = _bridge.disconnectLora();
+    _loraStatus = _bridge.getLoraStatus();
+    notifyListeners();
+    return ok;
+  }
+
   @override
   void dispose() {
     _pollTimer?.cancel();
@@ -520,3 +589,4 @@ class NeighborNetState extends ChangeNotifier {
     super.dispose();
   }
 }
+

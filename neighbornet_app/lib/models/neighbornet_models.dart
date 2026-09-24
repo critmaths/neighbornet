@@ -288,3 +288,98 @@ enum AppThemeProfile {
   nightVisionRed,
   sunlightHighContrast,
 }
+
+class SerialDeviceInfo {
+  final String portName;
+  final String portType;
+  final int? vid;
+  final int? pid;
+  final String? manufacturer;
+  final String? product;
+
+  SerialDeviceInfo({
+    required this.portName,
+    required this.portType,
+    this.vid,
+    this.pid,
+    this.manufacturer,
+    this.product,
+  });
+
+  factory SerialDeviceInfo.fromJson(Map<String, dynamic> json) {
+    return SerialDeviceInfo(
+      portName: json['port_name'] as String? ?? '',
+      portType: json['port_type'] as String? ?? 'Standard',
+      vid: (json['vid'] as num?)?.toInt(),
+      pid: (json['pid'] as num?)?.toInt(),
+      manufacturer: json['manufacturer'] as String?,
+      product: json['product'] as String?,
+    );
+  }
+
+  String get displayName {
+    if (product != null && product!.isNotEmpty) {
+      return '$portName ($product)';
+    }
+    if (manufacturer != null && manufacturer!.isNotEmpty) {
+      return '$portName ($manufacturer)';
+    }
+    return portName;
+  }
+}
+
+class LoraRadioStatus {
+  final bool isConnected;
+  final String portName;
+  final int baudRate;
+  final int freqHz;
+  final int bwHz;
+  final int sf;
+  final int cr;
+  final int txPackets;
+  final int rxPackets;
+  final int lastRssi;
+  final int lastSnr;
+  final int lastActivityEpochSec;
+
+  LoraRadioStatus({
+    required this.isConnected,
+    required this.portName,
+    required this.baudRate,
+    required this.freqHz,
+    required this.bwHz,
+    required this.sf,
+    required this.cr,
+    required this.txPackets,
+    required this.rxPackets,
+    required this.lastRssi,
+    required this.lastSnr,
+    required this.lastActivityEpochSec,
+  });
+
+  factory LoraRadioStatus.fromJson(Map<String, dynamic> json) {
+    return LoraRadioStatus(
+      isConnected: json['is_connected'] as bool? ?? false,
+      portName: json['port_name'] as String? ?? '',
+      baudRate: (json['baud_rate'] as num?)?.toInt() ?? 115200,
+      freqHz: (json['freq_hz'] as num?)?.toInt() ?? 915000000,
+      bwHz: (json['bw_hz'] as num?)?.toInt() ?? 125000,
+      sf: (json['sf'] as num?)?.toInt() ?? 10,
+      cr: (json['cr'] as num?)?.toInt() ?? 5,
+      txPackets: (json['tx_packets'] as num?)?.toInt() ?? 0,
+      rxPackets: (json['rx_packets'] as num?)?.toInt() ?? 0,
+      lastRssi: (json['last_rssi'] as num?)?.toInt() ?? -95,
+      lastSnr: (json['last_snr'] as num?)?.toInt() ?? 6,
+      lastActivityEpochSec: (json['last_activity_epoch_sec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  String get frequencyMhz {
+    return (freqHz / 1000000.0).toStringAsFixed(1);
+  }
+
+  String get bandwidthKhz {
+    return (bwHz / 1000.0).toStringAsFixed(0);
+  }
+}
+

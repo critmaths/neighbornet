@@ -15,11 +15,20 @@ class SettingsView extends StatefulWidget {
 
 class _SettingsViewState extends State<SettingsView> {
   late TextEditingController _nickCtrl;
+  String? _selectedPort;
+  int _selectedFreqHz = 915000000;
+  int _selectedSf = 10;
+  final int _selectedBaud = 115200;
 
   @override
   void initState() {
     super.initState();
     _nickCtrl = TextEditingController(text: widget.state.status?.nickname ?? '');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        widget.state.refreshSerialPorts();
+      }
+    });
   }
 
   @override
@@ -33,6 +42,8 @@ class _SettingsViewState extends State<SettingsView> {
   @override
   Widget build(BuildContext context) {
     final status = widget.state.status;
+    final lora = widget.state.loraStatus;
+    final ports = widget.state.serialPorts;
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -44,7 +55,7 @@ class _SettingsViewState extends State<SettingsView> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Configure your community presence and inspect cryptographic Reticulum details',
+            'Configure your community presence, LoRa hardware transceiver, and cryptographic keys',
             style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
 
@@ -132,6 +143,305 @@ class _SettingsViewState extends State<SettingsView> {
 
           const SizedBox(height: 20),
 
+          // LoRa Tactical Mesh Radio Card
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                color: lora?.isConnected == true
+                    ? Colors.greenAccent.withValues(alpha: 0.6)
+                    : Theme.of(context).dividerColor.withValues(alpha: 0.2),
+                width: lora?.isConnected == true ? 1.5 : 1.0,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.settings_input_antenna_rounded,
+                            color: lora?.isConnected == true ? Colors.greenAccent : Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'LoRa Tactical Radio (KISS / RNode)',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: lora?.isConnected == true
+                              ? Colors.green.withValues(alpha: 0.2)
+                              : Colors.grey.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: lora?.isConnected == true ? Colors.greenAccent : Colors.grey,
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: lora?.isConnected == true ? Colors.greenAccent : Colors.grey,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              lora?.isConnected == true ? 'CONNECTED & TRANSCEIVING' : 'DISCONNECTED',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: lora?.isConnected == true ? Colors.greenAccent : Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Direct long-range sovereign RF mesh communications without internet, Wi-Fi, or cellular infrastructure. Connect a Heltec, T-Beam, or SX1262 USB transceiver.',
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Serial Port Selector & Refresh
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          isExpanded: true,
+                          initialValue: _selectedPort ?? (ports.isNotEmpty ? ports.first.portName : null),
+                          decoration: const InputDecoration(
+                            labelText: 'Serial Port / USB Hardware Interface',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          items: ports.isEmpty
+                              ? [
+                                  const DropdownMenuItem(
+                                    value: null,
+                                    child: Text('No serial devices detected (Click Scan)', overflow: TextOverflow.ellipsis),
+                                  )
+                                ]
+                              : ports.map((p) {
+                                  return DropdownMenuItem(
+                                    value: p.portName,
+                                    child: Text(p.displayName, overflow: TextOverflow.ellipsis),
+                                  );
+                                }).toList(),
+                          onChanged: lora?.isConnected == true
+                              ? null
+                              : (val) {
+                                  setState(() {
+                                    _selectedPort = val;
+                                  });
+                                },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton.filledTonal(
+                        icon: widget.state.isLoraScanning
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh_rounded),
+                        tooltip: 'Scan Serial Ports',
+                        onPressed: lora?.isConnected == true
+                            ? null
+                            : () {
+                                widget.state.refreshSerialPorts();
+                              },
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Frequency & Spreading Factor Selectors
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<int>(
+                          isExpanded: true,
+                          initialValue: _selectedFreqHz,
+                          decoration: const InputDecoration(
+                            labelText: 'Region / Frequency Band',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 915000000, child: Text('915.0 MHz (US / Americas ISM)', overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 868000000, child: Text('868.0 MHz (EU / UK ISM)', overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 433000000, child: Text('433.0 MHz (Asia / Ham radio)', overflow: TextOverflow.ellipsis)),
+                          ],
+                          onChanged: lora?.isConnected == true
+                              ? null
+                              : (val) {
+                                  if (val != null) setState(() => _selectedFreqHz = val);
+                                },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: DropdownButtonFormField<int>(
+                          isExpanded: true,
+                          initialValue: _selectedSf,
+                          decoration: const InputDecoration(
+                            labelText: 'Spreading Factor (RF Modulation)',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 7, child: Text('SF7 (Fastest / Short Range)', overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 10, child: Text('SF10 (Standard / High Reliability)', overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 12, child: Text('SF12 (Maximum Distance Penetration)', overflow: TextOverflow.ellipsis)),
+                          ],
+                          onChanged: lora?.isConnected == true
+                              ? null
+                              : (val) {
+                                  if (val != null) setState(() => _selectedSf = val);
+                                },
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Connect / Disconnect Action and Telemetry
+                  Row(
+                    children: [
+                      if (lora?.isConnected != true)
+                        FilledButton.icon(
+                          icon: const Icon(Icons.cable_rounded, size: 18),
+                          label: const Text('Connect LoRa Radio'),
+                          onPressed: () async {
+                            final port = _selectedPort ?? (ports.isNotEmpty ? ports.first.portName : null);
+                            if (port == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Please select or scan a serial port first.')),
+                              );
+                              return;
+                            }
+                            final ok = await widget.state.connectLoraRadio(
+                              portName: port,
+                              baudRate: _selectedBaud,
+                              freqHz: _selectedFreqHz,
+                              sf: _selectedSf,
+                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(ok
+                                      ? '✅ Connected to LoRa hardware on $port (${_selectedFreqHz ~/ 1000000} MHz)!'
+                                      : '❌ Failed to connect to LoRa radio on $port.'),
+                                ),
+                              );
+                            }
+                          },
+                        )
+                      else
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.redAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          icon: const Icon(Icons.power_settings_new_rounded, size: 18),
+                          label: const Text('Disconnect LoRa Radio'),
+                          onPressed: () async {
+                            await widget.state.disconnectLoraRadio();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Disconnected LoRa transceiver.')),
+                              );
+                            }
+                          },
+                        ),
+                      const SizedBox(width: 16),
+                      if (lora != null && lora.isConnected) ...[
+                        Text(
+                          'TX: ${lora.txPackets} pkts | RX: ${lora.rxPackets} pkts | RSSI: ${lora.lastRssi} dBm | SNR: ${lora.lastSnr} dB',
+                          style: const TextStyle(fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Cryptographic Key Backup & Portability Card
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.vpn_key_rounded, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Cryptographic Key Backup & Portability',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Export your sovereign Reticulum private identity as a human-readable BIP-39 mnemonic seed phrase ("Paper Key") or restore an existing identity from words or raw hex.',
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      FilledButton.tonalIcon(
+                        icon: const Icon(Icons.description_outlined, size: 18),
+                        label: const Text('Backup Paper Key (48 BIP-39 Words)'),
+                        onPressed: () => _showPaperKeyDialog(context),
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.restore_rounded, size: 18),
+                        label: const Text('Restore Identity from Seed / Hex'),
+                        onPressed: () => _showRestoreIdentityDialog(context),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
           // Tactical Visual Profile Card
           Card(
             elevation: 0,
@@ -164,7 +474,6 @@ class _SettingsViewState extends State<SettingsView> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      // Option 1: Default Amber
                       _buildThemeOption(
                         context,
                         title: 'Cyber Amber',
@@ -174,7 +483,6 @@ class _SettingsViewState extends State<SettingsView> {
                         profile: AppThemeProfile.defaultDark,
                         isSelected: widget.state.themeProfile == AppThemeProfile.defaultDark,
                       ),
-                      // Option 2: Night Vision Red
                       _buildThemeOption(
                         context,
                         title: 'Night Vision Red',
@@ -184,7 +492,6 @@ class _SettingsViewState extends State<SettingsView> {
                         profile: AppThemeProfile.nightVisionRed,
                         isSelected: widget.state.themeProfile == AppThemeProfile.nightVisionRed,
                       ),
-                      // Option 3: Sunlight High-Contrast
                       _buildThemeOption(
                         context,
                         title: 'Sunlight Glare',
@@ -236,8 +543,6 @@ class _SettingsViewState extends State<SettingsView> {
                         style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
                       ),
                       const SizedBox(height: 16),
-
-                      // Quick Action Button
                       Row(
                         children: [
                           FilledButton.icon(
@@ -258,8 +563,6 @@ class _SettingsViewState extends State<SettingsView> {
                       const SizedBox(height: 16),
                       const Divider(),
                       const SizedBox(height: 8),
-
-                      // Option 1: Minimize Just to Tray
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         title: const Text(
@@ -267,7 +570,7 @@ class _SettingsViewState extends State<SettingsView> {
                           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                         ),
                         subtitle: const Text(
-                          'When minimizing the window, hide completely from the taskbar into the system tray. Default: shows on taskbar AND in the system tray when app is running.',
+                          'When minimizing the window, hide completely from the taskbar into the system tray.',
                           style: TextStyle(fontSize: 12),
                         ),
                         value: trayService.minimizeToTrayOnly,
@@ -275,8 +578,6 @@ class _SettingsViewState extends State<SettingsView> {
                           trayService.setMinimizeToTrayOnly(val);
                         },
                       ),
-
-                      // Option 2: Send to Tray on Close (X)
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         title: const Text(
@@ -284,7 +585,7 @@ class _SettingsViewState extends State<SettingsView> {
                           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                         ),
                         subtitle: const Text(
-                          'When clicking the window close button (X), send the app to the system tray instead of exiting, ensuring the community mesh remains alive.',
+                          'When clicking the window close button (X), send the app to the system tray instead of exiting.',
                           style: TextStyle(fontSize: 12),
                         ),
                         value: trayService.closeToTray,
@@ -407,6 +708,151 @@ class _SettingsViewState extends State<SettingsView> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showPaperKeyDialog(BuildContext context) {
+    final mnemonic = widget.state.exportIdentityMnemonic();
+    if (mnemonic == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to read cryptographic identity mnemonic.')),
+      );
+      return;
+    }
+
+    final words = mnemonic.split(' ');
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.vpn_key_rounded, color: Colors.amber),
+              SizedBox(width: 8),
+              Text('48-Word Paper Key'),
+            ],
+          ),
+          content: SizedBox(
+            width: 540,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Write down these 48 BIP-39 words on paper. Store them safely in a secure, waterproof location. This seed phrase will restore your entire cryptographic address and private key if your device is destroyed.',
+                  style: TextStyle(fontSize: 12, height: 1.4),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                  ),
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: SingleChildScrollView(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: List.generate(words.length, (idx) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '${idx + 1}. ${words[idx]}',
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              icon: const Icon(Icons.copy_rounded, size: 16),
+              label: const Text('Copy to Clipboard'),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: mnemonic));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('48-word mnemonic copied to clipboard!')),
+                );
+              },
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Done'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showRestoreIdentityDialog(BuildContext context) {
+    final ctrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Restore Cryptographic Identity'),
+          content: SizedBox(
+            width: 500,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Enter your 48-word BIP-39 mnemonic seed phrase (or 128-character raw hex private key):',
+                  style: TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    hintText: 'word1 word2 word3 ... or raw hex',
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final input = ctrl.text.trim();
+                if (input.isEmpty) return;
+                Navigator.of(ctx).pop();
+                final newHash = widget.state.restoreIdentity(input);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(newHash != null
+                          ? '✅ Identity successfully restored! New address hash: $newHash'
+                          : '❌ Failed to restore identity. Invalid seed phrase or hex key.'),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Restore Identity'),
+            ),
+          ],
+        );
+      },
     );
   }
 

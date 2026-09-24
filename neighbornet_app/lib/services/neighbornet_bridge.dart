@@ -54,6 +54,30 @@ typedef _DartCastVote = bool Function(Pointer<Utf8>, bool);
 typedef _NativeGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _DartGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
 
+typedef _NativePanicWipe = Bool Function();
+typedef _DartPanicWipe = bool Function();
+
+typedef _NativeExportMnemonic = Pointer<Utf8> Function();
+typedef _DartExportMnemonic = Pointer<Utf8> Function();
+
+typedef _NativeRestoreIdentity = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DartRestoreIdentity = Pointer<Utf8> Function(Pointer<Utf8>);
+
+typedef _NativeListSerialPorts = Pointer<Utf8> Function();
+typedef _DartListSerialPorts = Pointer<Utf8> Function();
+
+typedef _NativeConnectLora = Bool Function(Pointer<Utf8>, Uint32, Uint32, Uint32, Uint8, Uint8);
+typedef _DartConnectLora = bool Function(Pointer<Utf8>, int, int, int, int, int);
+
+typedef _NativeDisconnectLora = Bool Function();
+typedef _DartDisconnectLora = bool Function();
+
+typedef _NativeGetLoraStatus = Pointer<Utf8> Function();
+typedef _DartGetLoraStatus = Pointer<Utf8> Function();
+
+typedef _NativeSendLoraPacket = Bool Function(Pointer<Utf8>);
+typedef _DartSendLoraPacket = bool Function(Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -85,6 +109,16 @@ class NeighborNetBridge {
   late _DartGetRoomData _getProposalsJson;
   late _DartGetRoomData _getAuditLogJson;
 
+  late _DartPanicWipe _panicWipe;
+  late _DartExportMnemonic _exportIdentityMnemonic;
+  late _DartRestoreIdentity _restoreIdentity;
+
+  late _DartListSerialPorts _listSerialPorts;
+  late _DartConnectLora _connectLora;
+  late _DartDisconnectLora _disconnectLora;
+  late _DartGetLoraStatus _getLoraStatus;
+  late _DartSendLoraPacket _sendLoraPacket;
+
   bool get isReady => _isInitialized;
 
   void _loadLibrary() {
@@ -102,23 +136,16 @@ class NeighborNetBridge {
     ];
 
     for (final path in candidatePaths) {
-      if (File(path).existsSync()) {
-        try {
-          _dylib = DynamicLibrary.open(path);
-          break;
-        } catch (_) {}
-      }
+      try {
+        _dylib = DynamicLibrary.open(path);
+        break;
+      } catch (_) {}
     }
 
-    _dylib ??= DynamicLibrary.open(
-      Platform.isWindows
-          ? 'neighbornet_core.dll'
-          : Platform.isMacOS
-              ? 'libneighbornet_core.dylib'
-              : 'libneighbornet_core.so',
-    );
+    if (_dylib == null) {
+      return;
+    }
 
-    // Bind functions
     _init = _dylib!.lookupFunction<_NativeInit, _DartInit>('neighbornet_init');
     _stop = _dylib!.lookupFunction<_NativeStop, _DartStop>('neighbornet_stop_node');
     _getStatusJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_status_json');
@@ -141,10 +168,21 @@ class NeighborNetBridge {
     _castVote = _dylib!.lookupFunction<_NativeCastVote, _DartCastVote>('neighbornet_cast_vote');
     _getProposalsJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_proposals_json');
     _getAuditLogJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_audit_log_json');
+
+    _panicWipe = _dylib!.lookupFunction<_NativePanicWipe, _DartPanicWipe>('neighbornet_panic_wipe');
+    _exportIdentityMnemonic = _dylib!.lookupFunction<_NativeExportMnemonic, _DartExportMnemonic>('neighbornet_export_identity_mnemonic');
+    _restoreIdentity = _dylib!.lookupFunction<_NativeRestoreIdentity, _DartRestoreIdentity>('neighbornet_restore_identity');
+
+    _listSerialPorts = _dylib!.lookupFunction<_NativeListSerialPorts, _DartListSerialPorts>('neighbornet_list_serial_ports_json');
+    _connectLora = _dylib!.lookupFunction<_NativeConnectLora, _DartConnectLora>('neighbornet_connect_lora');
+    _disconnectLora = _dylib!.lookupFunction<_NativeDisconnectLora, _DartDisconnectLora>('neighbornet_disconnect_lora');
+    _getLoraStatus = _dylib!.lookupFunction<_NativeGetLoraStatus, _DartGetLoraStatus>('neighbornet_get_lora_status_json');
+    _sendLoraPacket = _dylib!.lookupFunction<_NativeSendLoraPacket, _DartSendLoraPacket>('neighbornet_send_lora_packet');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
     _loadLibrary();
+    if (_dylib == null) return false;
     final dirPtr = dataDir != null ? dataDir.toNativeUtf8() : nullptr;
     try {
       _isInitialized = _init(dirPtr, listenPort, isTransport);
@@ -200,12 +238,12 @@ class NeighborNetBridge {
   bool sendChat(String channel, String content) {
     if (!_isInitialized) return false;
     final chPtr = channel.toNativeUtf8();
-    final contentPtr = content.toNativeUtf8();
+    final cPtr = content.toNativeUtf8();
     try {
-      return _sendChat(chPtr, contentPtr);
+      return _sendChat(chPtr, cPtr);
     } finally {
       calloc.free(chPtr);
-      calloc.free(contentPtr);
+      calloc.free(cPtr);
     }
   }
 
@@ -227,19 +265,20 @@ class NeighborNetBridge {
     }
   }
 
-  bool postBulletin(String title, String body, String urgency) {
+  bool postBulletin(String title, String body, [String urgency = 'normal']) {
     if (!_isInitialized) return false;
-    final titlePtr = title.toNativeUtf8();
-    final bodyPtr = body.toNativeUtf8();
-    final urgencyPtr = urgency.toNativeUtf8();
+    final tPtr = title.toNativeUtf8();
+    final bPtr = body.toNativeUtf8();
+    final uPtr = urgency.toNativeUtf8();
     try {
-      return _postBulletin(titlePtr, bodyPtr, urgencyPtr);
+      return _postBulletin(tPtr, bPtr, uPtr);
     } finally {
-      calloc.free(titlePtr);
-      calloc.free(bodyPtr);
-      calloc.free(urgencyPtr);
+      calloc.free(tPtr);
+      calloc.free(bPtr);
+      calloc.free(uPtr);
     }
   }
+
 
   List<BulletinPost> getBulletins() {
     if (!_isInitialized) return [];
@@ -419,6 +458,96 @@ class NeighborNetBridge {
       }
     } finally {
       calloc.free(rPtr);
+    }
+  }
+
+  bool panicWipe() {
+    if (!_isInitialized) return false;
+    return _panicWipe();
+  }
+
+  String? exportIdentityMnemonic() {
+    if (!_isInitialized) return null;
+    final ptr = _exportIdentityMnemonic();
+    if (ptr == nullptr) return null;
+    try {
+      return ptr.toDartString();
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  String? restoreIdentity(String phraseOrHex) {
+    if (!_isInitialized) return null;
+    final inputPtr = phraseOrHex.toNativeUtf8();
+    try {
+      final ptr = _restoreIdentity(inputPtr);
+      if (ptr == nullptr) return null;
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(inputPtr);
+    }
+  }
+
+  List<SerialDeviceInfo> listSerialPorts() {
+    if (!_isInitialized) return [];
+    final ptr = _listSerialPorts();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => SerialDeviceInfo.fromJson(item as Map<String, dynamic>)).toList();
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  bool connectLora({
+    required String portName,
+    int baudRate = 115200,
+    int freqHz = 915000000,
+    int bwHz = 125000,
+    int sf = 10,
+    int cr = 5,
+  }) {
+    if (!_isInitialized) return false;
+    final portPtr = portName.toNativeUtf8();
+    try {
+      return _connectLora(portPtr, baudRate, freqHz, bwHz, sf, cr);
+    } finally {
+      calloc.free(portPtr);
+    }
+  }
+
+  bool disconnectLora() {
+    if (!_isInitialized) return false;
+    return _disconnectLora();
+  }
+
+  LoraRadioStatus? getLoraStatus() {
+    if (!_isInitialized) return null;
+    final ptr = _getLoraStatus();
+    if (ptr == nullptr) return null;
+    try {
+      final jsonStr = ptr.toDartString();
+      if (jsonStr.isEmpty) return null;
+      return LoraRadioStatus.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>);
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  bool sendLoraPacket(String payload) {
+    if (!_isInitialized) return false;
+    final payloadPtr = payload.toNativeUtf8();
+    try {
+      return _sendLoraPacket(payloadPtr);
+    } finally {
+      calloc.free(payloadPtr);
     }
   }
 }

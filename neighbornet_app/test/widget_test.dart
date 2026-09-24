@@ -9,9 +9,8 @@ void main() {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
 
-    final tempDir = Directory.systemTemp.createTempSync('neighbornet_ui_test_');
     final state = NeighborNetState();
-    await state.initialize(port: 46002);
+
 
     await tester.pumpWidget(NeighborNetApp(state: state));
     await tester.pump(const Duration(milliseconds: 200));
@@ -45,6 +44,12 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Node & Network Settings'), findsOneWidget);
+    expect(find.text('LoRa Tactical Radio (KISS / RNode)'), findsOneWidget);
+
+    // Scroll down to view desktop settings
+    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.pump(const Duration(milliseconds: 200));
+
     expect(find.text('Desktop & System Tray Options'), findsOneWidget);
     expect(find.text('Minimize to System Tray'), findsOneWidget);
     expect(find.text('Minimize Just to Tray'), findsOneWidget);
@@ -52,10 +57,9 @@ void main() {
 
     // Clean up
     state.dispose();
-    try {
-      tempDir.deleteSync(recursive: true);
-    } catch (_) {}
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
   });
 }
+
+
