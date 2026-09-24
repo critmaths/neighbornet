@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/neighbornet_models.dart';
 import '../services/neighbornet_bridge.dart';
 import '../services/notification_service.dart';
@@ -18,6 +19,8 @@ class NeighborNetState extends ChangeNotifier {
   final Set<String> _seenBulletinIds = {};
   final Map<String, int> _unreadCounts = {};
 
+  AppThemeProfile _themeProfile = AppThemeProfile.defaultDark;
+
   NodeStatus? _status;
   List<PeerInfo> _peers = [];
   List<BulletinPost> _bulletins = [];
@@ -31,6 +34,7 @@ class NeighborNetState extends ChangeNotifier {
   String? _errorMessage;
 
   bool get isInitialized => _isInitialized;
+  AppThemeProfile get themeProfile => _themeProfile;
   NodeStatus? get status => _status;
   List<PeerInfo> get peers => _peers;
   List<BulletinPost> get bulletins => _bulletins;
@@ -78,6 +82,7 @@ class NeighborNetState extends ChangeNotifier {
 
   Future<void> initialize({int port = 42424, bool isTransport = false}) async {
     try {
+      await loadThemeProfile();
       final appDir = Directory(
         '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}NeighborNet',
       );
@@ -105,6 +110,144 @@ class NeighborNetState extends ChangeNotifier {
       _errorMessage = 'Initialization error: $e';
     }
     notifyListeners();
+  }
+
+  Future<void> loadThemeProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final index = prefs.getInt('tactical_theme_profile') ?? 0;
+      if (index >= 0 && index < AppThemeProfile.values.length) {
+        _themeProfile = AppThemeProfile.values[index];
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setThemeProfile(AppThemeProfile profile) async {
+    _themeProfile = profile;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('tactical_theme_profile', profile.index);
+    } catch (_) {}
+  }
+
+  ThemeData get themeData {
+    switch (_themeProfile) {
+      case AppThemeProfile.nightVisionRed:
+        return ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          scaffoldBackgroundColor: const Color(0xFF030000),
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFFFF1744),
+            onPrimary: Colors.black,
+            secondary: Color(0xFFFF5252),
+            onSecondary: Colors.black,
+            surface: Color(0xFF100002),
+            onSurface: Color(0xFFFF8A80),
+            error: Color(0xFFFF1744),
+            onError: Colors.black,
+          ),
+          cardTheme: CardThemeData(
+            color: const Color(0xFF100002),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: Color(0x66FF1744), width: 1),
+            ),
+          ),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF080001),
+            foregroundColor: Color(0xFFFF5252),
+          ),
+          navigationRailTheme: const NavigationRailThemeData(
+            backgroundColor: Color(0xFF080001),
+            selectedIconTheme: IconThemeData(color: Color(0xFFFF1744)),
+            unselectedIconTheme: IconThemeData(color: Color(0x99FF5252)),
+            selectedLabelTextStyle: TextStyle(color: Color(0xFFFF1744), fontWeight: FontWeight.bold),
+            unselectedLabelTextStyle: TextStyle(color: Color(0x99FF5252)),
+          ),
+        );
+
+      case AppThemeProfile.sunlightHighContrast:
+        return ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: const Color(0xFFFFFFFF),
+          colorScheme: const ColorScheme.light(
+            primary: Color(0xFF000000),
+            onPrimary: Colors.white,
+            secondary: Color(0xFFEAB308),
+            onSecondary: Colors.black,
+            surface: Color(0xFFF4F4F5),
+            onSurface: Color(0xFF000000),
+            error: Color(0xFFDC2626),
+            onError: Colors.white,
+          ),
+          cardTheme: CardThemeData(
+            color: const Color(0xFFF4F4F5),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: Color(0xFF000000), width: 1.5),
+            ),
+          ),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF000000),
+            foregroundColor: Color(0xFFFFFFFF),
+          ),
+          navigationRailTheme: const NavigationRailThemeData(
+            backgroundColor: Color(0xFFE4E4E7),
+            selectedIconTheme: IconThemeData(color: Color(0xFF000000)),
+            unselectedIconTheme: IconThemeData(color: Color(0xFF71717A)),
+            selectedLabelTextStyle: TextStyle(color: Color(0xFF000000), fontWeight: FontWeight.bold),
+            unselectedLabelTextStyle: TextStyle(color: Color(0xFF71717A)),
+          ),
+        );
+
+      case AppThemeProfile.defaultDark:
+        return ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          scaffoldBackgroundColor: const Color(0xFF0B0F19),
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFFF59E0B),
+            secondary: Color(0xFF06B6D4),
+            surface: Color(0xFF131B2E),
+            onSurface: Color(0xFFF1F5F9),
+            error: Color(0xFFEF4444),
+          ),
+          cardTheme: CardThemeData(
+            color: const Color(0xFF131B2E),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: Color(0xFF1E293B)),
+            ),
+          ),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF0F172A),
+            foregroundColor: Color(0xFFF1F5F9),
+          ),
+        );
+    }
+  }
+
+  Future<bool> executePanicWipe() async {
+    final success = _bridge.panicWipe();
+    if (success) {
+      _seenMessageIds.clear();
+      _seenBulletinIds.clear();
+      _unreadCounts.clear();
+      _channelMessages.clear();
+      _roomProposals.clear();
+      _roomAuditLogs.clear();
+      _currentChannel = 'general';
+      _refreshState();
+      notifyListeners();
+    }
+    return success;
   }
 
   void _refreshState() {

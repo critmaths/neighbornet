@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../models/neighbornet_models.dart';
 import '../services/tray_and_window_service.dart';
 import '../state/neighbornet_state.dart';
 
@@ -123,6 +124,77 @@ class _SettingsViewState extends State<SettingsView> {
                         ),
                       ],
                     ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Tactical Visual Profile Card
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.palette_outlined, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Tactical Visual Profile',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Adapt your display for tactical night-vision stealth or direct sunlight outdoor operations.',
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      // Option 1: Default Amber
+                      _buildThemeOption(
+                        context,
+                        title: 'Cyber Amber',
+                        subtitle: 'Default Dark',
+                        color: const Color(0xFFF59E0B),
+                        bgColor: const Color(0xFF0B0F19),
+                        profile: AppThemeProfile.defaultDark,
+                        isSelected: widget.state.themeProfile == AppThemeProfile.defaultDark,
+                      ),
+                      // Option 2: Night Vision Red
+                      _buildThemeOption(
+                        context,
+                        title: 'Night Vision Red',
+                        subtitle: 'Aviation OLED Black',
+                        color: const Color(0xFFFF1744),
+                        bgColor: const Color(0xFF030000),
+                        profile: AppThemeProfile.nightVisionRed,
+                        isSelected: widget.state.themeProfile == AppThemeProfile.nightVisionRed,
+                      ),
+                      // Option 3: Sunlight High-Contrast
+                      _buildThemeOption(
+                        context,
+                        title: 'Sunlight Glare',
+                        subtitle: 'High-Contrast Daylight',
+                        color: const Color(0xFF000000),
+                        bgColor: const Color(0xFFFFFFFF),
+                        profile: AppThemeProfile.sunlightHighContrast,
+                        isSelected: widget.state.themeProfile == AppThemeProfile.sunlightHighContrast,
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -257,6 +329,55 @@ class _SettingsViewState extends State<SettingsView> {
 
           const SizedBox(height: 20),
 
+          // Emergency Duress / Panic Wipe Card
+          Card(
+            elevation: 0,
+            color: const Color(0xFF1E0A0E),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: Color(0xFFFF1744), width: 1.5),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: Color(0xFFFF1744)),
+                      SizedBox(width: 8),
+                      Text(
+                        'Duress Protocol / Panic Wipe',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFFF5252),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'For hostile inspection or emergency device surrender. Securely shreds your private cryptographic identity (identity.hex), drops and vacuums local SQLite databases, purges file caches, and resets this node to a clean anonymous state.',
+                    style: TextStyle(fontSize: 12, height: 1.4, color: Color(0xFFFFCDD2)),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF1744),
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: const Icon(Icons.delete_forever_rounded, size: 18),
+                    label: const Text('EXECUTE PANIC WIPE', style: TextStyle(fontWeight: FontWeight.bold)),
+                    onPressed: () => _showPanicWipeDialog(context),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
           // Architectural Vision Card
           Card(
             elevation: 0,
@@ -289,6 +410,63 @@ class _SettingsViewState extends State<SettingsView> {
     );
   }
 
+  void _showPanicWipeDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF180306),
+          title: const Row(
+            children: [
+              Icon(Icons.report_problem_rounded, color: Color(0xFFFF1744)),
+              SizedBox(width: 8),
+              Text('Confirm Emergency Wipe', style: TextStyle(color: Color(0xFFFF5252), fontSize: 18)),
+            ],
+          ),
+          content: const Text(
+            'WARNING: This action is permanent and irreversible.\n\n'
+            '• Cryptographic identity will be shredded.\n'
+            '• All SQLite message histories will be dropped.\n'
+            '• Community room credentials will be purged.\n'
+            '• Node will immediately reset to an anonymous identity.',
+            style: TextStyle(color: Color(0xFFFFCDD2), fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFFF1744),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                final ok = await widget.state.executePanicWipe();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: const Color(0xFF100002),
+                      content: Text(
+                        ok
+                            ? '🚨 Emergency Panic Wipe completed: Node state wiped clean.'
+                            : 'Failed to execute complete panic wipe.',
+                        style: const TextStyle(color: Color(0xFFFF5252), fontWeight: FontWeight.bold),
+                      ),
+                      duration: const Duration(seconds: 4),
+                    ),
+                  );
+                }
+              },
+              child: const Text('WIPE EVERYTHING NOW'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildStatusRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
@@ -298,6 +476,78 @@ class _SettingsViewState extends State<SettingsView> {
           Text(label, style: const TextStyle(fontSize: 13, color: Colors.grey)),
           Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildThemeOption(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required Color color,
+    required Color bgColor,
+    required AppThemeProfile profile,
+    required bool isSelected,
+  }) {
+    return InkWell(
+      onTap: () {
+        widget.state.setThemeProfile(profile);
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 180,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? color : color.withValues(alpha: 0.3),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      color: profile == AppThemeProfile.sunlightHighContrast ? Colors.black : Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (isSelected)
+                  Icon(
+                    Icons.check_circle_rounded,
+                    size: 16,
+                    color: color,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: profile == AppThemeProfile.sunlightHighContrast ? Colors.black87 : Colors.white70,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

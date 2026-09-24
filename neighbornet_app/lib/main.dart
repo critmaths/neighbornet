@@ -36,26 +36,17 @@ class NeighborNetApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider.value(value: vService),
       ],
-      child: MaterialApp(
-      title: 'NeighborNet',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B5E20), // Resilient forest green
-          brightness: Brightness.light,
-        ),
+      child: ListenableBuilder(
+        listenable: state,
+        builder: (context, _) {
+          return MaterialApp(
+            title: 'NeighborNet',
+            debugShowCheckedModeBanner: false,
+            theme: state.themeData,
+            home: MainShell(state: state),
+          );
+        },
       ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2E7D32),
-          brightness: Brightness.dark,
-        ),
-      ),
-      themeMode: ThemeMode.system,
-      home: MainShell(state: state),
-    ),
     );
   }
 }

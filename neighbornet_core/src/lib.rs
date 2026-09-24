@@ -880,6 +880,86 @@ impl NeighborNode {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Emergency Duress / Panic Wipe:
+    /// Securely shreds local cryptographic identity, drops and vacuums SQLite databases,
+    /// removes room and file caches, and wipes all in-memory message history.
+    pub fn panic_wipe(&self) -> Result<(), String> {
+        // 1. Wipe in-memory state
+        self.inner.peers.write().clear();
+        self.inner.messages.write().clear();
+        self.inner.bulletins.write().clear();
+        self.inner.files.write().clear();
+        self.inner.rooms.write().clear();
+        self.inner.proposals.write().clear();
+        self.inner.audit_log.write().clear();
+        self.inner.seen_ids.write().clear();
+
+        // 2. Drop and securely reset SQLite tables
+        if let Ok(conn) = self.inner.db.lock() {
+            let _ = conn.execute("DROP TABLE IF EXISTS messages", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS bulletins", []);
+            let _ = conn.execute("VACUUM", []);
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    channel TEXT NOT NULL,
+                    sender_hash TEXT NOT NULL,
+                    sender_nickname TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp_sec)", []);
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS bulletins (
+                    id TEXT PRIMARY KEY,
+                    author_hash TEXT NOT NULL,
+                    author_nickname TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    priority TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL
+                )",
+                [],
+            );
+        }
+
+        // 3. Cryptographically shred and remove identity.hex
+        let identity_path = self.inner.data_dir.join("identity.hex");
+        if identity_path.exists() {
+            if let Ok(meta) = fs::metadata(&identity_path) {
+                let len = meta.len() as usize;
+                let zeroes = vec![0u8; len.max(64)];
+                let _ = fs::write(&identity_path, &zeroes);
+            }
+            let _ = fs::remove_file(&identity_path);
+        }
+
+        // 4. Remove cached room metadata and file chunks
+        let rooms_dir = self.inner.data_dir.join("rooms");
+        if rooms_dir.exists() {
+            let _ = fs::remove_dir_all(&rooms_dir);
+        }
+
+        let files_dir = self.inner.data_dir.join("files");
+        if files_dir.exists() {
+            let _ = fs::remove_dir_all(&files_dir);
+        }
+
+        // 5. Generate fresh anonymous nickname
+        let mut rng = OsRng;
+        let random_suffix: String = (0..4)
+            .map(|_| format!("{:x}", rand_core::RngCore::next_u32(&mut rng) % 16))
+            .collect();
+        *self.inner.nickname.write() = format!("Neighbor-{}", random_suffix);
+
+        Ok(())
+    }
 }
 
 fn start_network_threads(inner: Arc<NodeInner>, socket: UdpSocket) {
@@ -1676,4 +1756,14 @@ pub extern "C" fn neighbornet_get_audit_log_json(room_id_c: *const c_char) -> *m
     let log = node.get_audit_log(&room_id);
     let json = serde_json::to_string(&log).unwrap_or_else(|_| "[]".to_string());
     to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_panic_wipe() -> bool {
+    let lock = GLOBAL_NODE.read();
+    if let Some(node) = lock.as_ref() {
+        node.panic_wipe().is_ok()
+    } else {
+        false
+    }
 }

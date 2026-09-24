@@ -54,6 +54,9 @@ typedef _DartCastVote = bool Function(Pointer<Utf8>, bool);
 typedef _NativeGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _DartGetRoomData = Pointer<Utf8> Function(Pointer<Utf8>);
 
+typedef _NativePanicWipe = Bool Function();
+typedef _DartPanicWipe = bool Function();
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -84,6 +87,7 @@ class NeighborNetBridge {
   late _DartCastVote _castVote;
   late _DartGetRoomData _getProposalsJson;
   late _DartGetRoomData _getAuditLogJson;
+  late _DartPanicWipe _panicWipe;
 
   bool get isReady => _isInitialized;
 
@@ -141,6 +145,14 @@ class NeighborNetBridge {
     _castVote = _dylib!.lookupFunction<_NativeCastVote, _DartCastVote>('neighbornet_cast_vote');
     _getProposalsJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_proposals_json');
     _getAuditLogJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_audit_log_json');
+    _panicWipe = _dylib!.lookupFunction<_NativePanicWipe, _DartPanicWipe>('neighbornet_panic_wipe');
+  }
+
+  bool panicWipe() {
+    if (_isInitialized) {
+      return _panicWipe();
+    }
+    return false;
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {

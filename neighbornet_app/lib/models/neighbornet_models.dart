@@ -282,3 +282,9 @@ class GovernanceEventInfo {
     );
   }
 }
+
+enum AppThemeProfile {
+  defaultDark,
+  nightVisionRed,
+  sunlightHighContrast,
+}
