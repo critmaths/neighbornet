@@ -9,6 +9,8 @@
 # Build artifacts & compiled binaries
 target/
 build/
+dist/
+dist/*
 .dart_tool/
 .packages
 pubspec.lock
