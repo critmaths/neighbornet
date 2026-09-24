@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  neighbornet-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neighbornet_relay
+    restart: unless-stopped
+    network_mode: host # Host networking is required for local UDP subnet broadcasts
+    environment:
+      - PORT=42424
+      - NICKNAME=HomeSolarHub
+      - DATA_DIR=/data
+    volumes:
+      - neighbornet_data:/data
+
+volumes:
+  neighbornet_data:
