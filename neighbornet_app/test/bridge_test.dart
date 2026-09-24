@@ -89,6 +89,8 @@ void main() {
     // Clean up
     bridge.stopNode();
     expect(bridge.isReady, isFalse);
-    tempDir.deleteSync(recursive: true);
+    try {
+      tempDir.deleteSync(recursive: true);
+    } catch (_) {}
   });
 }

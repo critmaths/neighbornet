@@ -5,6 +5,7 @@ import 'views/chat_view.dart';
 import 'views/bulletin_view.dart';
 import 'views/people_view.dart';
 import 'views/emergency_view.dart';
+import 'views/survival_manual_view.dart';
 import 'views/settings_view.dart';
 import 'views/voice_chat_view.dart';
 import 'services/voice_chat_service.dart';
@@ -186,6 +187,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Voice Chat'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.menu_book_outlined),
+                    selectedIcon: Icon(Icons.menu_book),
+                    label: Text('Survival Manual'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.shield_outlined),
                     selectedIcon: Icon(Icons.shield, color: Colors.red),
                     label: Text('Emergency Mode'),
@@ -222,8 +228,10 @@ class _MainShellState extends State<MainShell> {
       case 3:
         return const VoiceChatView();
       case 4:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 5:
+        return EmergencyView(state: widget.state);
+      case 6:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

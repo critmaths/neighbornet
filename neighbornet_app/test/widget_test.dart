@@ -52,7 +52,9 @@ void main() {
 
     // Clean up
     state.dispose();
-    tempDir.deleteSync(recursive: true);
+    try {
+      tempDir.deleteSync(recursive: true);
+    } catch (_) {}
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
   });
