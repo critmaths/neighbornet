@@ -8,6 +8,7 @@ import 'views/emergency_view.dart';
 import 'views/survival_manual_view.dart';
 import 'views/settings_view.dart';
 import 'views/voice_chat_view.dart';
+import 'views/forms_view.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
@@ -174,6 +175,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Bulletin'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.assignment_outlined),
+                    selectedIcon: Icon(Icons.assignment),
+                    label: Text('Community Forms'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.people_outline),
                     selectedIcon: Icon(Icons.people),
                     label: Text('People & Nodes'),
@@ -221,14 +227,16 @@ class _MainShellState extends State<MainShell> {
       case 1:
         return BulletinView(state: widget.state);
       case 2:
-        return PeopleView(state: widget.state);
+        return FormsView(state: widget.state);
       case 3:
-        return const VoiceChatView();
+        return PeopleView(state: widget.state);
       case 4:
-        return SurvivalManualView(state: widget.state);
+        return const VoiceChatView();
       case 5:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 6:
+        return EmergencyView(state: widget.state);
+      case 7:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

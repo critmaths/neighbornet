@@ -29,6 +29,8 @@ class NeighborNetState extends ChangeNotifier {
   final Map<String, List<ChatMessage>> _channelMessages = {};
   final Map<String, List<StewardVoteInfo>> _roomProposals = {};
   final Map<String, List<GovernanceEventInfo>> _roomAuditLogs = {};
+  List<FormSchema> _formSchemas = [];
+  final Map<String, List<FormEntry>> _formEntries = {};
 
   String _currentChannel = 'general';
   String? _errorMessage;
@@ -44,6 +46,7 @@ class NeighborNetState extends ChangeNotifier {
   List<BulletinPost> get bulletins => _bulletins;
   List<SharedFileInfo> get sharedFiles => _sharedFiles;
   List<RoomInfo> get rooms => _rooms;
+  List<FormSchema> get formSchemas => _formSchemas;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -57,6 +60,7 @@ class NeighborNetState extends ChangeNotifier {
 
   List<StewardVoteInfo> getProposals(String roomId) => _roomProposals[roomId] ?? _bridge.getProposals(roomId);
   List<GovernanceEventInfo> getAuditLog(String roomId) => _roomAuditLogs[roomId] ?? _bridge.getAuditLog(roomId);
+  List<FormEntry> getFormEntriesForSchema(String schemaId) => _formEntries[schemaId] ?? _bridge.getFormEntries(schemaId);
 
   int getUnreadCount(String channel) => _unreadCounts[channel] ?? 0;
   int get totalUnreadCount => _unreadCounts.values.fold(0, (a, b) => a + b);
@@ -252,6 +256,8 @@ class NeighborNetState extends ChangeNotifier {
       _channelMessages.clear();
       _roomProposals.clear();
       _roomAuditLogs.clear();
+      _formSchemas.clear();
+      _formEntries.clear();
       _currentChannel = 'general';
       _refreshState();
       notifyListeners();
@@ -267,6 +273,10 @@ class NeighborNetState extends ChangeNotifier {
     _bulletins = _bridge.getBulletins();
     _sharedFiles = _bridge.getSharedFiles();
     _rooms = _bridge.getRooms();
+    _formSchemas = _bridge.getFormSchemas();
+    for (final s in _formSchemas) {
+      _formEntries[s.id] = _bridge.getFormEntries(s.id);
+    }
     final lora = _bridge.getLoraStatus();
     if (lora != null) {
       _loraStatus = lora;
@@ -580,6 +590,45 @@ class NeighborNetState extends ChangeNotifier {
     _loraStatus = _bridge.getLoraStatus();
     notifyListeners();
     return ok;
+  }
+
+  Future<void> refreshFormSchemas() async {
+    _formSchemas = _bridge.getFormSchemas();
+    for (final s in _formSchemas) {
+      _formEntries[s.id] = _bridge.getFormEntries(s.id);
+    }
+    notifyListeners();
+  }
+
+  Future<void> refreshFormEntries(String schemaId) async {
+    _formEntries[schemaId] = _bridge.getFormEntries(schemaId);
+    notifyListeners();
+  }
+
+  Future<FormSchema?> createFormSchema({
+    required String title,
+    required String description,
+    required String category,
+    required List<FormFieldDef> fields,
+  }) async {
+    final schema = _bridge.createFormSchema(
+      title: title,
+      description: description,
+      category: category,
+      fields: fields,
+    );
+    if (schema != null) {
+      await refreshFormSchemas();
+    }
+    return schema;
+  }
+
+  Future<FormEntry?> submitFormEntry(String schemaId, Map<String, dynamic> data) async {
+    final entry = _bridge.submitFormEntry(schemaId, data);
+    if (entry != null) {
+      await refreshFormEntries(schemaId);
+    }
+    return entry;
   }
 
   @override

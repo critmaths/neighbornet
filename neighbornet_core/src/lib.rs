@@ -111,6 +111,41 @@ pub struct GovernanceEvent {
     pub timestamp_sec: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct FormFieldDef {
+    pub id: String,
+    pub label: String,
+    pub field_type: String, // "text", "number", "select", "checkbox", "datetime"
+    pub required: bool,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub default_value: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct FormSchema {
+    pub id: String,
+    pub title: String,
+    pub category: String, // "triage", "logistics", "barter", "rollcall", "custom"
+    pub description: String,
+    pub author_hash: String,
+    pub author_nickname: String,
+    pub fields: Vec<FormFieldDef>,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct FormEntry {
+    pub id: String,
+    pub schema_id: String,
+    pub author_hash: String,
+    pub author_nickname: String,
+    pub data_json: String,
+    pub timestamp_sec: u64,
+    pub signature_hex: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "kind")]
 pub enum WireEnvelope {
@@ -128,11 +163,19 @@ pub enum WireEnvelope {
         known_bulletin_ids: Vec<String>,
         known_file_hashes: Vec<String>,
         known_room_ids: Vec<String>,
+        #[serde(default)]
+        known_schema_ids: Vec<String>,
+        #[serde(default)]
+        known_entry_ids: Vec<String>,
     },
     SyncResponse {
         bulletins: Vec<BulletinPost>,
         files: Vec<SharedFileMeta>,
         rooms: Vec<RoomMeta>,
+        #[serde(default)]
+        schemas: Vec<FormSchema>,
+        #[serde(default)]
+        entries: Vec<FormEntry>,
     },
     FileAnnounce(SharedFileMeta),
     FileChunkRequest {
@@ -152,6 +195,8 @@ pub enum WireEnvelope {
         approve: bool,
     },
     GovernanceEventBroadcast(GovernanceEvent),
+    FormSchemaAnnounce(FormSchema),
+    FormEntryAnnounce(FormEntry),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -183,6 +228,8 @@ pub struct NodeInner {
     pub rooms: RwLock<HashMap<String, RoomMeta>>,
     pub proposals: RwLock<HashMap<String, StewardVote>>,
     pub audit_log: RwLock<HashMap<String, Vec<GovernanceEvent>>>,
+    pub form_schemas: RwLock<HashMap<String, FormSchema>>,
+    pub form_entries: RwLock<HashMap<String, Vec<FormEntry>>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -224,6 +271,288 @@ fn load_or_create_identity(data_dir: &Path) -> (PrivateIdentity, String) {
     let _ = fs::write(key_path, hex_str);
 
     (identity, hash_hex)
+}
+
+fn default_form_schemas(author_hash: &str, author_nick: &str) -> Vec<FormSchema> {
+    vec![
+        FormSchema {
+            id: "schema-med-triage-start".to_string(),
+            title: "Disaster Medical Triage (START)".to_string(),
+            category: "triage".to_string(),
+            description: "Simple Triage and Rapid Treatment protocol for field mass casualty triage.".to_string(),
+            author_hash: author_hash.to_string(),
+            author_nickname: author_nick.to_string(),
+            created_at: 1700000000,
+            fields: vec![
+                FormFieldDef {
+                    id: "patient_tag".to_string(),
+                    label: "Patient ID / Tag #".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "triage_color".to_string(),
+                    label: "Triage Category".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Red (Immediate)".to_string(),
+                        "Yellow (Delayed)".to_string(),
+                        "Green (Minor)".to_string(),
+                        "Black (Expectant/Deceased)".to_string(),
+                    ],
+                    default_value: Some("Yellow (Delayed)".to_string()),
+                },
+                FormFieldDef {
+                    id: "can_walk".to_string(),
+                    label: "Can Walk / Ambulatory".to_string(),
+                    field_type: "checkbox".to_string(),
+                    required: false,
+                    options: vec![],
+                    default_value: Some("false".to_string()),
+                },
+                FormFieldDef {
+                    id: "respirations".to_string(),
+                    label: "Respiration Rate".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Normal (<30/min)".to_string(),
+                        "Rapid (>30/min)".to_string(),
+                        "Absent / Apnea".to_string(),
+                    ],
+                    default_value: Some("Normal (<30/min)".to_string()),
+                },
+                FormFieldDef {
+                    id: "perfusion".to_string(),
+                    label: "Perfusion / Radial Pulse".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Radial Pulse Present".to_string(),
+                        "No Pulse / Cap Refill >2s".to_string(),
+                    ],
+                    default_value: Some("Radial Pulse Present".to_string()),
+                },
+                FormFieldDef {
+                    id: "mental_status".to_string(),
+                    label: "Mental Status".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Follows Simple Commands".to_string(),
+                        "Altered / Unresponsive".to_string(),
+                    ],
+                    default_value: Some("Follows Simple Commands".to_string()),
+                },
+                FormFieldDef {
+                    id: "location".to_string(),
+                    label: "Field Staging Location".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "chief_complaint".to_string(),
+                    label: "Injuries / Chief Complaint".to_string(),
+                    field_type: "text".to_string(),
+                    required: false,
+                    options: vec![],
+                    default_value: None,
+                },
+            ],
+        },
+        FormSchema {
+            id: "schema-ration-distribution".to_string(),
+            title: "Emergency Water & Supply Ration Log".to_string(),
+            category: "logistics".to_string(),
+            description: "Structured distribution tracking for water, rations, fuel, and medical packs.".to_string(),
+            author_hash: author_hash.to_string(),
+            author_nickname: author_nick.to_string(),
+            created_at: 1700000000,
+            fields: vec![
+                FormFieldDef {
+                    id: "distribution_station".to_string(),
+                    label: "Distribution Station / Hub".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "recipient_id".to_string(),
+                    label: "Recipient / Household ID".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "family_size".to_string(),
+                    label: "Household Headcount".to_string(),
+                    field_type: "number".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: Some("1".to_string()),
+                },
+                FormFieldDef {
+                    id: "resource_type".to_string(),
+                    label: "Resource Dispensed".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Potable Water (Gallons)".to_string(),
+                        "MRE / Food Ration Packs".to_string(),
+                        "Generator Fuel (Gallons)".to_string(),
+                        "Medical / First-Aid Kit".to_string(),
+                        "Batteries / Solar Lanterns".to_string(),
+                    ],
+                    default_value: Some("Potable Water (Gallons)".to_string()),
+                },
+                FormFieldDef {
+                    id: "quantity".to_string(),
+                    label: "Quantity Dispensed".to_string(),
+                    field_type: "number".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: Some("1".to_string()),
+                },
+                FormFieldDef {
+                    id: "notes".to_string(),
+                    label: "Special Needs / Notes".to_string(),
+                    field_type: "text".to_string(),
+                    required: false,
+                    options: vec![],
+                    default_value: None,
+                },
+            ],
+        },
+        FormSchema {
+            id: "schema-barter-ledger".to_string(),
+            title: "Community Mutual Aid & Barter Ledger".to_string(),
+            category: "barter".to_string(),
+            description: "Decentralized trade ledger for peer-to-peer bartering and mutual aid coordination.".to_string(),
+            author_hash: author_hash.to_string(),
+            author_nickname: author_nick.to_string(),
+            created_at: 1700000000,
+            fields: vec![
+                FormFieldDef {
+                    id: "listing_type".to_string(),
+                    label: "Offer or Request".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Offering Item/Skill".to_string(),
+                        "Requesting / ISO".to_string(),
+                    ],
+                    default_value: Some("Offering Item/Skill".to_string()),
+                },
+                FormFieldDef {
+                    id: "item_title".to_string(),
+                    label: "Item / Service Title".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "barter_terms".to_string(),
+                    label: "Wanted in Exchange".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "contact_location".to_string(),
+                    label: "Contact Location / Stand / Channel".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "urgency_level".to_string(),
+                    label: "Urgency Level".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "Standard".to_string(),
+                        "Urgent".to_string(),
+                        "Critical Need".to_string(),
+                    ],
+                    default_value: Some("Standard".to_string()),
+                },
+            ],
+        },
+        FormSchema {
+            id: "schema-roll-call".to_string(),
+            title: "Disaster Roll-Call & Safety Check-in".to_string(),
+            category: "rollcall".to_string(),
+            description: "Household safety verification and wellness census for community defense/relief.".to_string(),
+            author_hash: author_hash.to_string(),
+            author_nickname: author_nick.to_string(),
+            created_at: 1700000000,
+            fields: vec![
+                FormFieldDef {
+                    id: "household_name".to_string(),
+                    label: "Household / Group Name".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "status".to_string(),
+                    label: "Safety Status".to_string(),
+                    field_type: "select".to_string(),
+                    required: true,
+                    options: vec![
+                        "All Safe / OK".to_string(),
+                        "Minor Injuries".to_string(),
+                        "Critical Emergency / Trapped".to_string(),
+                        "Need Supplies / Power".to_string(),
+                    ],
+                    default_value: Some("All Safe / OK".to_string()),
+                },
+                FormFieldDef {
+                    id: "people_count".to_string(),
+                    label: "Number of People in Group".to_string(),
+                    field_type: "number".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: Some("1".to_string()),
+                },
+                FormFieldDef {
+                    id: "shelter_location".to_string(),
+                    label: "Shelter Location / Address".to_string(),
+                    field_type: "text".to_string(),
+                    required: true,
+                    options: vec![],
+                    default_value: None,
+                },
+                FormFieldDef {
+                    id: "needs_rescue".to_string(),
+                    label: "Immediate Rescue Required".to_string(),
+                    field_type: "checkbox".to_string(),
+                    required: false,
+                    options: vec![],
+                    default_value: Some("false".to_string()),
+                },
+                FormFieldDef {
+                    id: "details".to_string(),
+                    label: "Status Details / Remarks".to_string(),
+                    field_type: "text".to_string(),
+                    required: false,
+                    options: vec![],
+                    default_value: None,
+                },
+            ],
+        },
+    ]
 }
 
 impl NeighborNode {
@@ -310,7 +639,30 @@ impl NeighborNode {
                content TEXT NOT NULL,
                priority TEXT NOT NULL,
                timestamp_sec INTEGER NOT NULL
-             );"
+             );
+
+             CREATE TABLE IF NOT EXISTS form_schemas (
+               id TEXT PRIMARY KEY,
+               title TEXT NOT NULL,
+               category TEXT NOT NULL,
+               description TEXT NOT NULL,
+               author_hash TEXT NOT NULL,
+               author_nickname TEXT NOT NULL,
+               fields_json TEXT NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+
+             CREATE TABLE IF NOT EXISTS form_entries (
+               id TEXT PRIMARY KEY,
+               schema_id TEXT NOT NULL,
+               author_hash TEXT NOT NULL,
+               author_nickname TEXT NOT NULL,
+               data_json TEXT NOT NULL,
+               timestamp_sec INTEGER NOT NULL,
+               signature_hex TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_form_entries_schema ON form_entries(schema_id);
+             CREATE INDEX IF NOT EXISTS idx_form_entries_timestamp ON form_entries(timestamp_sec);"
         ).map_err(|e| format!("Failed to initialize DB schema: {}", e))?;
 
         let mut loaded_messages = Vec::new();
@@ -350,9 +702,62 @@ impl NeighborNode {
             }
         }
 
+        let mut loaded_schemas = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, title, category, description, author_hash, author_nickname, fields_json, created_at FROM form_schemas") {
+            if let Ok(schema_iter) = stmt.query_map([], |row| {
+                let fields_json: String = row.get(6)?;
+                let fields: Vec<FormFieldDef> = serde_json::from_str(&fields_json).unwrap_or_default();
+                Ok(FormSchema {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    category: row.get(2)?,
+                    description: row.get(3)?,
+                    author_hash: row.get(4)?,
+                    author_nickname: row.get(5)?,
+                    fields,
+                    created_at: row.get(7)?,
+                })
+            }) {
+                for s in schema_iter.flatten() {
+                    loaded_schemas.insert(s.id.clone(), s);
+                }
+            }
+        }
+        if loaded_schemas.is_empty() {
+            for s in default_form_schemas(&dest_hash_hex, &default_nick) {
+                let fields_json = serde_json::to_string(&s.fields).unwrap_or_default();
+                let _ = db.execute(
+                    "INSERT OR IGNORE INTO form_schemas (id, title, category, description, author_hash, author_nickname, fields_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![s.id, s.title, s.category, s.description, s.author_hash, s.author_nickname, fields_json, s.created_at],
+                );
+                loaded_schemas.insert(s.id.clone(), s);
+            }
+        }
+
+        let mut loaded_entries: HashMap<String, Vec<FormEntry>> = HashMap::new();
         let mut seen_ids = HashSet::new();
         for msg in &loaded_messages { seen_ids.insert(msg.id.clone()); }
         for id in loaded_bulletins.keys() { seen_ids.insert(id.clone()); }
+        for id in loaded_schemas.keys() { seen_ids.insert(id.clone()); }
+
+        if let Ok(mut stmt) = db.prepare("SELECT id, schema_id, author_hash, author_nickname, data_json, timestamp_sec, signature_hex FROM form_entries ORDER BY timestamp_sec ASC") {
+            if let Ok(entry_iter) = stmt.query_map([], |row| {
+                Ok(FormEntry {
+                    id: row.get(0)?,
+                    schema_id: row.get(1)?,
+                    author_hash: row.get(2)?,
+                    author_nickname: row.get(3)?,
+                    data_json: row.get(4)?,
+                    timestamp_sec: row.get(5)?,
+                    signature_hex: row.get(6)?,
+                })
+            }) {
+                for e in entry_iter.flatten() {
+                    seen_ids.insert(e.id.clone());
+                    loaded_entries.entry(e.schema_id.clone()).or_default().push(e);
+                }
+            }
+        }
 
         let lora_mgr = Arc::new(lora::LoraManager::new());
 
@@ -370,6 +775,8 @@ impl NeighborNode {
             rooms: RwLock::new(loaded_rooms),
             proposals: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(HashMap::new()),
+            form_schemas: RwLock::new(loaded_schemas),
+            form_entries: RwLock::new(loaded_entries),
             seen_ids: RwLock::new(seen_ids),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -903,6 +1310,121 @@ impl NeighborNode {
             .unwrap_or_default()
     }
 
+    // --- DECLARATIVE OFFLINE FORM / COMMUNITY LEDGER SUBSYSTEM ---
+
+    pub fn get_form_schemas(&self) -> Vec<FormSchema> {
+        let mut list: Vec<FormSchema> = self.inner.form_schemas.read().values().cloned().collect();
+        list.sort_by_key(|s| s.created_at);
+        list
+    }
+
+    pub fn create_form_schema(
+        &self,
+        title: String,
+        description: String,
+        category: String,
+        fields: Vec<FormFieldDef>,
+    ) -> Result<FormSchema, String> {
+        let now = current_epoch_sec();
+        let author_hash = self.inner.dest_hash_hex.clone();
+        let author_nickname = self.inner.nickname.read().clone();
+        let id = format!(
+            "schema-{}",
+            &compute_hash(&format!("{}:{}:{}:{}", title, category, author_hash, now))[..16]
+        );
+
+        let schema = FormSchema {
+            id: id.clone(),
+            title,
+            category,
+            description,
+            author_hash: author_hash.clone(),
+            author_nickname: author_nickname.clone(),
+            fields,
+            created_at: now,
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let fields_json = serde_json::to_string(&schema.fields).unwrap_or_default();
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO form_schemas (id, title, category, description, author_hash, author_nickname, fields_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    schema.id,
+                    schema.title,
+                    schema.category,
+                    schema.description,
+                    schema.author_hash,
+                    schema.author_nickname,
+                    fields_json,
+                    schema.created_at
+                ],
+            );
+        }
+
+        self.inner.form_schemas.write().insert(id.clone(), schema.clone());
+        self.inner.seen_ids.write().insert(id);
+
+        let envelope = WireEnvelope::FormSchemaAnnounce(schema.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(schema)
+    }
+
+    pub fn get_form_entries(&self, schema_id: &str) -> Vec<FormEntry> {
+        let mut list = match self.inner.form_entries.read().get(schema_id) {
+            Some(entries) => entries.clone(),
+            None => Vec::new(),
+        };
+        list.sort_by_key(|e| std::cmp::Reverse(e.timestamp_sec));
+        list
+    }
+
+    pub fn submit_form_entry(&self, schema_id: String, data_json: String) -> Result<FormEntry, String> {
+        let now = current_epoch_sec();
+        let author_hash = self.inner.dest_hash_hex.clone();
+        let author_nickname = self.inner.nickname.read().clone();
+        let entry_id = format!(
+            "entry-{}",
+            &compute_hash(&format!("{}:{}:{}:{}", schema_id, author_hash, data_json, now))[..16]
+        );
+        let signature_hex = compute_hash(&format!("{}:{}:{}:{}", entry_id, schema_id, author_hash, data_json));
+
+        let entry = FormEntry {
+            id: entry_id.clone(),
+            schema_id: schema_id.clone(),
+            author_hash,
+            author_nickname,
+            data_json,
+            timestamp_sec: now,
+            signature_hex,
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute(
+                "INSERT OR IGNORE INTO form_entries (id, schema_id, author_hash, author_nickname, data_json, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    entry.id,
+                    entry.schema_id,
+                    entry.author_hash,
+                    entry.author_nickname,
+                    entry.data_json,
+                    entry.timestamp_sec,
+                    entry.signature_hex
+                ],
+            );
+        }
+
+        let mut entries_guard = self.inner.form_entries.write();
+        entries_guard.entry(schema_id).or_default().push(entry.clone());
+        drop(entries_guard);
+        self.inner.seen_ids.write().insert(entry_id);
+
+        let envelope = WireEnvelope::FormEntryAnnounce(entry.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(entry)
+    }
+
     /// Emergency Duress / Panic Wipe:
     /// Securely shreds local cryptographic identity, drops and vacuums SQLite databases,
     /// removes room and file caches, and wipes all in-memory message history.
@@ -915,12 +1437,16 @@ impl NeighborNode {
         self.inner.rooms.write().clear();
         self.inner.proposals.write().clear();
         self.inner.audit_log.write().clear();
+        self.inner.form_schemas.write().clear();
+        self.inner.form_entries.write().clear();
         self.inner.seen_ids.write().clear();
 
         // 2. Drop and securely reset SQLite tables
         if let Ok(conn) = self.inner.db.lock() {
             let _ = conn.execute("DROP TABLE IF EXISTS messages", []);
             let _ = conn.execute("DROP TABLE IF EXISTS bulletins", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS form_schemas", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS form_entries", []);
             let _ = conn.execute("VACUUM", []);
 
             let _ = conn.execute(
@@ -949,6 +1475,47 @@ impl NeighborNode {
                 )",
                 [],
             );
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS form_schemas (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    author_hash TEXT NOT NULL,
+                    author_nickname TEXT NOT NULL,
+                    fields_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )",
+                [],
+            );
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS form_entries (
+                    id TEXT PRIMARY KEY,
+                    schema_id TEXT NOT NULL,
+                    author_hash TEXT NOT NULL,
+                    author_nickname TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL,
+                    signature_hex TEXT NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_form_entries_schema ON form_entries(schema_id)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_form_entries_timestamp ON form_entries(timestamp_sec)", []);
+        }
+
+        // Re-seed default form schemas
+        for s in default_form_schemas(&self.inner.dest_hash_hex, &self.inner.nickname.read()) {
+            if let Ok(conn) = self.inner.db.lock() {
+                let fields_json = serde_json::to_string(&s.fields).unwrap_or_default();
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO form_schemas (id, title, category, description, author_hash, author_nickname, fields_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![s.id, s.title, s.category, s.description, s.author_hash, s.author_nickname, fields_json, s.created_at],
+                );
+            }
+            self.inner.form_schemas.write().insert(s.id.clone(), s);
         }
 
         // 3. Cryptographically shred and remove identity.hex
@@ -1155,7 +1722,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 }
             }
 
-            // Sync missing bulletins, file manifests, and rooms
+            // Sync missing bulletins, file manifests, rooms, schemas, and entries
             let my_b_count = inner.bulletins.read().len();
             let my_f_count = inner.files.read().len();
             let my_r_count = inner.rooms.read().len();
@@ -1163,10 +1730,14 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 let known_b_ids: Vec<String> = inner.bulletins.read().keys().cloned().collect();
                 let known_f_hashes: Vec<String> = inner.files.read().keys().cloned().collect();
                 let known_r_ids: Vec<String> = inner.rooms.read().keys().cloned().collect();
+                let known_s_ids: Vec<String> = inner.form_schemas.read().keys().cloned().collect();
+                let known_e_ids: Vec<String> = inner.form_entries.read().values().flat_map(|v| v.iter().map(|e| e.id.clone())).collect();
                 let sync_req = WireEnvelope::SyncRequest {
                     known_bulletin_ids: known_b_ids,
                     known_file_hashes: known_f_hashes,
                     known_room_ids: known_r_ids,
+                    known_schema_ids: known_s_ids,
+                    known_entry_ids: known_e_ids,
                 };
                 if let Ok(json) = serde_json::to_string(&sync_req) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -1220,6 +1791,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             known_bulletin_ids,
             known_file_hashes,
             known_room_ids,
+            known_schema_ids,
+            known_entry_ids,
         } => {
             let known_b_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
             let missing_bulletins: Vec<BulletinPost> = inner
@@ -1248,18 +1821,50 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 .cloned()
                 .collect();
 
-            if !missing_bulletins.is_empty() || !missing_files.is_empty() || !missing_rooms.is_empty() {
+            let known_s_set: HashSet<String> = known_schema_ids.into_iter().collect();
+            let missing_schemas: Vec<FormSchema> = inner
+                .form_schemas
+                .read()
+                .values()
+                .filter(|s| !known_s_set.contains(&s.id))
+                .cloned()
+                .collect();
+
+            let known_e_set: HashSet<String> = known_entry_ids.into_iter().collect();
+            let missing_entries: Vec<FormEntry> = inner
+                .form_entries
+                .read()
+                .values()
+                .flat_map(|v| v.iter())
+                .filter(|e| !known_e_set.contains(&e.id))
+                .cloned()
+                .collect();
+
+            if !missing_bulletins.is_empty()
+                || !missing_files.is_empty()
+                || !missing_rooms.is_empty()
+                || !missing_schemas.is_empty()
+                || !missing_entries.is_empty()
+            {
                 let resp = WireEnvelope::SyncResponse {
                     bulletins: missing_bulletins,
                     files: missing_files,
                     rooms: missing_rooms,
+                    schemas: missing_schemas,
+                    entries: missing_entries,
                 };
                 if let Ok(json) = serde_json::to_string(&resp) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
             }
         }
-        WireEnvelope::SyncResponse { bulletins, files, rooms } => {
+        WireEnvelope::SyncResponse {
+            bulletins,
+            files,
+            rooms,
+            schemas,
+            entries,
+        } => {
             let mut seen = inner.seen_ids.write();
             let mut stored_b = inner.bulletins.write();
             for b in bulletins {
@@ -1314,6 +1919,92 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     }
                     stored_r.insert(r.id.clone(), r);
                 }
+            }
+
+            let mut stored_s = inner.form_schemas.write();
+            for s in schemas {
+                if seen.insert(s.id.clone()) {
+                    if let Ok(db) = inner.db.lock() {
+                        let fields_json = serde_json::to_string(&s.fields).unwrap_or_default();
+                        let _ = db.execute(
+                            "INSERT OR IGNORE INTO form_schemas (id, title, category, description, author_hash, author_nickname, fields_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                            rusqlite::params![
+                                s.id,
+                                s.title,
+                                s.category,
+                                s.description,
+                                s.author_hash,
+                                s.author_nickname,
+                                fields_json,
+                                s.created_at
+                            ],
+                        );
+                    }
+                    stored_s.insert(s.id.clone(), s);
+                }
+            }
+
+            let mut stored_e = inner.form_entries.write();
+            for e in entries {
+                if seen.insert(e.id.clone()) {
+                    if let Ok(db) = inner.db.lock() {
+                        let _ = db.execute(
+                            "INSERT OR IGNORE INTO form_entries (id, schema_id, author_hash, author_nickname, data_json, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                            rusqlite::params![
+                                e.id,
+                                e.schema_id,
+                                e.author_hash,
+                                e.author_nickname,
+                                e.data_json,
+                                e.timestamp_sec,
+                                e.signature_hex
+                            ],
+                        );
+                    }
+                    stored_e.entry(e.schema_id.clone()).or_default().push(e);
+                }
+            }
+        }
+        WireEnvelope::FormSchemaAnnounce(schema) => {
+            let mut seen = inner.seen_ids.write();
+            if seen.insert(schema.id.clone()) {
+                if let Ok(db) = inner.db.lock() {
+                    let fields_json = serde_json::to_string(&schema.fields).unwrap_or_default();
+                    let _ = db.execute(
+                        "INSERT OR IGNORE INTO form_schemas (id, title, category, description, author_hash, author_nickname, fields_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        rusqlite::params![
+                            schema.id,
+                            schema.title,
+                            schema.category,
+                            schema.description,
+                            schema.author_hash,
+                            schema.author_nickname,
+                            fields_json,
+                            schema.created_at
+                        ],
+                    );
+                }
+                inner.form_schemas.write().insert(schema.id.clone(), schema);
+            }
+        }
+        WireEnvelope::FormEntryAnnounce(entry) => {
+            let mut seen = inner.seen_ids.write();
+            if seen.insert(entry.id.clone()) {
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "INSERT OR IGNORE INTO form_entries (id, schema_id, author_hash, author_nickname, data_json, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            entry.id,
+                            entry.schema_id,
+                            entry.author_hash,
+                            entry.author_nickname,
+                            entry.data_json,
+                            entry.timestamp_sec,
+                            entry.signature_hex
+                        ],
+                    );
+                }
+                inner.form_entries.write().entry(entry.schema_id.clone()).or_default().push(entry);
             }
         }
         WireEnvelope::FileAnnounce(mut meta) => {
@@ -1956,5 +2647,101 @@ pub extern "C" fn neighbornet_send_lora_packet(data_c: *const c_char) -> bool {
     };
 
     node.inner.lora_manager.send_packet(data.as_bytes())
+}
+
+// --- OFFLINE FORMS & COMMUNITY LEDGER FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_form_schemas_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let schemas = node.get_form_schemas();
+    let json = serde_json::to_string(&schemas).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_create_form_schema(
+    title_c: *const c_char,
+    description_c: *const c_char,
+    category_c: *const c_char,
+    fields_json_c: *const c_char,
+) -> *mut c_char {
+    if title_c.is_null() || description_c.is_null() || category_c.is_null() || fields_json_c.is_null() {
+        return to_c_string("{\"error\":\"Invalid arguments\"}".to_string());
+    }
+    let title = unsafe { CStr::from_ptr(title_c).to_string_lossy().into_owned() };
+    let description = unsafe { CStr::from_ptr(description_c).to_string_lossy().into_owned() };
+    let category = unsafe { CStr::from_ptr(category_c).to_string_lossy().into_owned() };
+    let fields_json = unsafe { CStr::from_ptr(fields_json_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    let fields: Vec<FormFieldDef> = serde_json::from_str(&fields_json).unwrap_or_default();
+    match node.create_form_schema(title, description, category, fields) {
+        Ok(schema) => {
+            let json = serde_json::to_string(&schema).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_form_entries_json(schema_id_c: *const c_char) -> *mut c_char {
+    if schema_id_c.is_null() {
+        return to_c_string("[]".to_string());
+    }
+    let schema_id = unsafe { CStr::from_ptr(schema_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let entries = node.get_form_entries(&schema_id);
+    let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_submit_form_entry(
+    schema_id_c: *const c_char,
+    data_json_c: *const c_char,
+) -> *mut c_char {
+    if schema_id_c.is_null() || data_json_c.is_null() {
+        return to_c_string("{\"error\":\"Invalid arguments\"}".to_string());
+    }
+    let schema_id = unsafe { CStr::from_ptr(schema_id_c).to_string_lossy().into_owned() };
+    let data_json = unsafe { CStr::from_ptr(data_json_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.submit_form_entry(schema_id, data_json) {
+        Ok(entry) => {
+            let json = serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
 }
 

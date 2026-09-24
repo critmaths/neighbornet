@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class NodeStatus {
   final String destHash;
   final String nickname;
@@ -380,6 +382,149 @@ class LoraRadioStatus {
 
   String get bandwidthKhz {
     return (bwHz / 1000.0).toStringAsFixed(0);
+  }
+}
+
+class FormFieldDef {
+  final String id;
+  final String label;
+  final String fieldType; // "text", "number", "select", "checkbox", "datetime"
+  final bool required;
+  final List<String> options;
+  final String? defaultValue;
+
+  FormFieldDef({
+    required this.id,
+    required this.label,
+    required this.fieldType,
+    required this.required,
+    this.options = const [],
+    this.defaultValue,
+  });
+
+  factory FormFieldDef.fromJson(Map<String, dynamic> json) {
+    return FormFieldDef(
+      id: json['id'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      fieldType: json['field_type'] as String? ?? 'text',
+      required: json['required'] as bool? ?? false,
+      options: (json['options'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      defaultValue: json['default_value'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'label': label,
+      'field_type': fieldType,
+      'required': required,
+      'options': options,
+      'default_value': defaultValue,
+    };
+  }
+}
+
+class FormSchema {
+  final String id;
+  final String title;
+  final String category; // "triage", "logistics", "barter", "rollcall", "custom"
+  final String description;
+  final String authorHash;
+  final String authorNickname;
+  final List<FormFieldDef> fields;
+  final int createdAt;
+
+  FormSchema({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.description,
+    required this.authorHash,
+    required this.authorNickname,
+    required this.fields,
+    required this.createdAt,
+  });
+
+  factory FormSchema.fromJson(Map<String, dynamic> json) {
+    return FormSchema(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? 'Community Form',
+      category: json['category'] as String? ?? 'custom',
+      description: json['description'] as String? ?? '',
+      authorHash: json['author_hash'] as String? ?? '',
+      authorNickname: json['author_nickname'] as String? ?? 'Neighbor',
+      fields: (json['fields'] as List<dynamic>?)
+              ?.map((e) => FormFieldDef.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      createdAt: (json['created_at'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'category': category,
+      'description': description,
+      'author_hash': authorHash,
+      'author_nickname': authorNickname,
+      'fields': fields.map((f) => f.toJson()).toList(),
+      'created_at': createdAt,
+    };
+  }
+}
+
+class FormEntry {
+  final String id;
+  final String schemaId;
+  final String authorHash;
+  final String authorNickname;
+  final String dataJson;
+  final int timestampSec;
+  final String signatureHex;
+
+  FormEntry({
+    required this.id,
+    required this.schemaId,
+    required this.authorHash,
+    required this.authorNickname,
+    required this.dataJson,
+    required this.timestampSec,
+    required this.signatureHex,
+  });
+
+  factory FormEntry.fromJson(Map<String, dynamic> json) {
+    return FormEntry(
+      id: json['id'] as String? ?? '',
+      schemaId: json['schema_id'] as String? ?? '',
+      authorHash: json['author_hash'] as String? ?? '',
+      authorNickname: json['author_nickname'] as String? ?? 'Neighbor',
+      dataJson: json['data_json'] as String? ?? '{}',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? 0,
+      signatureHex: json['signature_hex'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'schema_id': schemaId,
+      'author_hash': authorHash,
+      'author_nickname': authorNickname,
+      'data_json': dataJson,
+      'timestamp_sec': timestampSec,
+      'signature_hex': signatureHex,
+    };
+  }
+
+  Map<String, dynamic> get parsedData {
+    try {
+      return jsonDecode(dataJson) as Map<String, dynamic>;
+    } catch (_) {
+      return {};
+    }
   }
 }
 

@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neighbornet_app/main.dart';
@@ -20,6 +19,7 @@ void main() {
     expect(find.text('CHANNELS'), findsOneWidget);
     expect(find.text('Chat'), findsOneWidget);
     expect(find.text('Bulletin'), findsOneWidget);
+    expect(find.text('Community Forms'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
     expect(find.text('Voice Chat'), findsOneWidget);
     expect(find.text('Emergency Mode'), findsOneWidget);
@@ -29,6 +29,11 @@ void main() {
     await tester.tap(find.text('Bulletin'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Community Bulletin Board'), findsOneWidget);
+
+    // Switch to Community Forms view
+    await tester.tap(find.text('Community Forms'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Community Forms & Micro-Apps'), findsOneWidget);
 
     // Switch to People & Nodes view
     await tester.tap(find.text('People & Nodes'));

@@ -78,6 +78,16 @@ typedef _DartGetLoraStatus = Pointer<Utf8> Function();
 typedef _NativeSendLoraPacket = Bool Function(Pointer<Utf8>);
 typedef _DartSendLoraPacket = bool Function(Pointer<Utf8>);
 
+typedef _NativeCreateFormSchema = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+typedef _DartCreateFormSchema = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+
+typedef _NativeSubmitFormEntry = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartSubmitFormEntry = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -118,6 +128,11 @@ class NeighborNetBridge {
   late _DartDisconnectLora _disconnectLora;
   late _DartGetLoraStatus _getLoraStatus;
   late _DartSendLoraPacket _sendLoraPacket;
+
+  late _DartGetJson _getFormSchemasJson;
+  late _DartCreateFormSchema _createFormSchema;
+  late _DartGetRoomData _getFormEntriesJson;
+  late _DartSubmitFormEntry _submitFormEntry;
 
   bool get isReady => _isInitialized;
 
@@ -178,6 +193,11 @@ class NeighborNetBridge {
     _disconnectLora = _dylib!.lookupFunction<_NativeDisconnectLora, _DartDisconnectLora>('neighbornet_disconnect_lora');
     _getLoraStatus = _dylib!.lookupFunction<_NativeGetLoraStatus, _DartGetLoraStatus>('neighbornet_get_lora_status_json');
     _sendLoraPacket = _dylib!.lookupFunction<_NativeSendLoraPacket, _DartSendLoraPacket>('neighbornet_send_lora_packet');
+
+    _getFormSchemasJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_form_schemas_json');
+    _createFormSchema = _dylib!.lookupFunction<_NativeCreateFormSchema, _DartCreateFormSchema>('neighbornet_create_form_schema');
+    _getFormEntriesJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_form_entries_json');
+    _submitFormEntry = _dylib!.lookupFunction<_NativeSubmitFormEntry, _DartSubmitFormEntry>('neighbornet_submit_form_entry');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -548,6 +568,102 @@ class NeighborNetBridge {
       return _sendLoraPacket(payloadPtr);
     } finally {
       calloc.free(payloadPtr);
+    }
+  }
+
+  List<FormSchema> getFormSchemas() {
+    if (!_isInitialized) return [];
+    final ptr = _getFormSchemasJson();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => FormSchema.fromJson(item as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  FormSchema? createFormSchema({
+    required String title,
+    required String description,
+    required String category,
+    required List<FormFieldDef> fields,
+  }) {
+    if (!_isInitialized) return null;
+    final titlePtr = title.toNativeUtf8();
+    final descPtr = description.toNativeUtf8();
+    final catPtr = category.toNativeUtf8();
+    final fieldsJson = jsonEncode(fields.map((f) => f.toJson()).toList());
+    final fieldsPtr = fieldsJson.toNativeUtf8();
+
+    try {
+      final ptr = _createFormSchema(titlePtr, descPtr, catPtr, fieldsPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return FormSchema.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(titlePtr);
+      calloc.free(descPtr);
+      calloc.free(catPtr);
+      calloc.free(fieldsPtr);
+    }
+  }
+
+  List<FormEntry> getFormEntries(String schemaId) {
+    if (!_isInitialized) return [];
+    final schemaIdPtr = schemaId.toNativeUtf8();
+    try {
+      final ptr = _getFormEntriesJson(schemaIdPtr);
+      if (ptr == nullptr) return [];
+      try {
+        final jsonStr = ptr.toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return list.map((item) => FormEntry.fromJson(item as Map<String, dynamic>)).toList();
+      } catch (_) {
+        return [];
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return [];
+    } finally {
+      calloc.free(schemaIdPtr);
+    }
+  }
+
+  FormEntry? submitFormEntry(String schemaId, Map<String, dynamic> data) {
+    if (!_isInitialized) return null;
+    final schemaIdPtr = schemaId.toNativeUtf8();
+    final dataJson = jsonEncode(data);
+    final dataPtr = dataJson.toNativeUtf8();
+
+    try {
+      final ptr = _submitFormEntry(schemaIdPtr, dataPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return FormEntry.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(schemaIdPtr);
+      calloc.free(dataPtr);
     }
   }
 }
