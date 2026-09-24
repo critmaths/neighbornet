@@ -1,10 +1,32 @@
 import 'package:flutter/material.dart';
+import '../models/neighbornet_models.dart';
 import '../state/neighbornet_state.dart';
 
 class PeopleView extends StatelessWidget {
   final NeighborNetState state;
 
   const PeopleView({super.key, required this.state});
+
+  void _startCall(BuildContext context, PeerInfo peer, {bool withVideo = false}) {
+    state.startCallWithPeer(peer, withVideo: withVideo);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(withVideo ? Icons.videocam : Icons.phone, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Calling ${peer.nickname} (${withVideo ? "Video" : "Voice"})... Signaled over mesh.',
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.teal,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -180,11 +202,35 @@ class PeopleView extends StatelessWidget {
                               ),
                             ],
                           ),
-                          trailing: FilledButton.tonal(
-                            onPressed: () {
-                              state.selectChannel('general');
-                            },
-                            child: const Text('Chat'),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton.filledTonal(
+                                icon: const Icon(Icons.phone_rounded, size: 18),
+                                tooltip: '1-Tap Voice Call',
+                                onPressed: () => _startCall(context, peer, withVideo: false),
+                              ),
+                              const SizedBox(width: 6),
+                              IconButton.filledTonal(
+                                icon: const Icon(Icons.videocam_rounded, size: 18),
+                                tooltip: '1-Tap Video Call',
+                                onPressed: () => _startCall(context, peer, withVideo: true),
+                              ),
+                              const SizedBox(width: 6),
+                              FilledButton.tonalIcon(
+                                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
+                                label: const Text('Direct Whisper'),
+                                onPressed: () {
+                                  state.selectDirectMessage(peer);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Switched to Direct Whisper with ${peer.nickname} (E2EE)'),
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
                           ),
                         ),
                       );

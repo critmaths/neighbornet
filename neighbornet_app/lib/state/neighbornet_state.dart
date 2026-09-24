@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../models/neighbornet_models.dart';
 import '../services/neighbornet_bridge.dart';
 import '../services/notification_service.dart';
+import '../services/voice_chat_service.dart';
 
 class NeighborNetState extends ChangeNotifier {
   final NeighborNetBridge _bridge = NeighborNetBridge();
   Timer? _pollTimer;
+  VoiceChatService? _voiceChatService;
 
   bool _isInitialized = false;
   bool _isFirstRefresh = true;
@@ -36,11 +39,39 @@ class NeighborNetState extends ChangeNotifier {
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
-  List<ChatMessage> get currentMessages => _channelMessages[_currentChannel] ?? [];
+  List<ChatMessage> get currentMessages => getDisplayMessages(_currentChannel);
   int get nearbyCount => _peers.length;
 
   int getUnreadCount(String channel) => _unreadCounts[channel] ?? 0;
   int get totalUnreadCount => _unreadCounts.values.fold(0, (a, b) => a + b);
+
+  void attachVoiceChatService(VoiceChatService service) {
+    _voiceChatService = service;
+    _voiceChatService?.setSignalSender((targetPeerId, type, data) {
+      _sendSignalEnvelope(targetPeerId, type, data);
+    });
+  }
+
+  List<ChatMessage> getDisplayMessages(String channel) {
+    final raw = _channelMessages[channel] ?? [];
+    return raw.where((m) => !m.content.startsWith('[SIGNAL:')).toList();
+  }
+
+  bool isDirectMessageChannel(String channel) => channel.startsWith('dm_');
+
+  PeerInfo? getPeerForChannel(String channel) {
+    if (!isDirectMessageChannel(channel)) return null;
+    final hash = channel.substring('dm_'.length);
+    try {
+      return _peers.firstWhere((p) => p.destHash == hash);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void selectDirectMessage(PeerInfo peer) {
+    selectChannel('dm_${peer.destHash}');
+  }
 
   Future<void> initialize({int port = 42424, bool isTransport = false}) async {
     try {
@@ -96,11 +127,7 @@ class NeighborNetState extends ChangeNotifier {
       }
     }
 
-    // Refresh active channel messages
-    final msgs = _bridge.getChatHistory(_currentChannel);
-    _channelMessages[_currentChannel] = msgs;
-
-    // Scan all known channels for new messages & unread counts
+    // Scan all known channels + DM channels for new messages & signals
     final allChannels = <String>{
       'general',
       'emergency',
@@ -109,10 +136,14 @@ class NeighborNetState extends ChangeNotifier {
       'logistics',
       'watercooler',
       ..._rooms.map((r) => r.id),
+      ..._peers.map((p) => 'dm_${p.destHash}'),
     };
 
+    final currentMsgs = _bridge.getChatHistory(_currentChannel);
+    _channelMessages[_currentChannel] = currentMsgs;
+
     for (final ch in allChannels) {
-      final history = (ch == _currentChannel) ? msgs : _bridge.getChatHistory(ch);
+      final history = (ch == _currentChannel) ? currentMsgs : _bridge.getChatHistory(ch);
       if (ch != _currentChannel) {
         _channelMessages[ch] = history;
       }
@@ -121,16 +152,24 @@ class NeighborNetState extends ChangeNotifier {
         if (!_seenMessageIds.contains(msg.id)) {
           _seenMessageIds.add(msg.id);
 
+          // Check if message is a WebRTC signal envelope
+          if (msg.content.startsWith('[SIGNAL:')) {
+            _handleSignalMessage(msg);
+            continue;
+          }
+
           if (!_isFirstRefresh && _status?.destHash != null && msg.senderHash != _status!.destHash) {
-            // Increment unread count if not in this channel
             if (ch != _currentChannel) {
               _unreadCounts[ch] = (_unreadCounts[ch] ?? 0) + 1;
             }
 
-            // Trigger desktop notification
+            final displayCh = isDirectMessageChannel(ch)
+                ? 'DM from ${msg.senderNickname}'
+                : msg.channel;
+
             NotificationService.instance.showMessageNotification(
               senderNickname: msg.senderNickname,
-              channel: msg.channel,
+              channel: displayCh,
               content: msg.content,
             );
           }
@@ -148,10 +187,70 @@ class NeighborNetState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _handleSignalMessage(ChatMessage msg) {
+    try {
+      // Format: [SIGNAL:targetHash:type:jsonPayload]
+      final raw = msg.content.substring('[SIGNAL:'.length);
+      final firstColon = raw.indexOf(':');
+      if (firstColon == -1) return;
+      final targetHash = raw.substring(0, firstColon);
+
+      final rest = raw.substring(firstColon + 1);
+      final secondColon = rest.indexOf(':');
+      if (secondColon == -1) return;
+      final type = rest.substring(0, secondColon);
+      final payloadJson = rest.substring(secondColon + 1);
+
+      // Verify destination is our node
+      if (_status?.destHash != null && targetHash != _status!.destHash) {
+        return;
+      }
+
+      final payload = jsonDecode(payloadJson) as Map<String, dynamic>;
+
+      if (type == 'offer') {
+        _voiceChatService?.handleIncomingOffer(
+          callerId: msg.senderHash,
+          callerNickname: payload['callerNickname'] as String? ?? msg.senderNickname,
+          sdpOffer: payload['sdp'] as String? ?? '',
+          withVideo: payload['withVideo'] as bool? ?? false,
+        );
+        NotificationService.instance.showMessageNotification(
+          senderNickname: msg.senderNickname,
+          channel: 'Incoming Call',
+          content: 'Incoming ${payload['withVideo'] == true ? 'Video' : 'Voice'} Call...',
+        );
+      } else if (type == 'answer') {
+        _voiceChatService?.handleIncomingAnswer(payload['sdp'] as String? ?? '');
+      } else if (type == 'candidate') {
+        _voiceChatService?.handleIncomingCandidate(payload);
+      } else if (type == 'hangup' || type == 'busy') {
+        _voiceChatService?.handleHangup();
+      }
+    } catch (e) {
+      debugPrint('[NeighborNetState] Error parsing signal envelope: $e');
+    }
+  }
+
+  void _sendSignalEnvelope(String targetPeerId, String type, Map<String, dynamic> data) {
+    final payload = jsonEncode(data);
+    final envelope = '[SIGNAL:$targetPeerId:$type:$payload]';
+    // Send envelope over general channel or peer DM
+    _bridge.sendChat('general', envelope);
+  }
+
+  void startCallWithPeer(PeerInfo peer, {bool withVideo = false}) {
+    _voiceChatService?.startCall(
+      peer.destHash,
+      peerNickname: peer.nickname,
+      withVideo: withVideo,
+    );
+  }
+
   void selectChannel(String channel) {
     if (_currentChannel != channel) {
       _currentChannel = channel;
-      _unreadCounts[channel] = 0; // Clear unread count on view
+      _unreadCounts[channel] = 0;
       final msgs = _bridge.getChatHistory(channel);
       _channelMessages[channel] = msgs;
       if (channel.startsWith('room_')) {
@@ -252,23 +351,20 @@ class NeighborNetState extends ChangeNotifier {
 
   bool castVote(String proposalId, bool approve) {
     final success = _bridge.castVote(proposalId, approve);
-    if (success) {
-      if (_currentChannel.startsWith('room_')) {
-        _roomProposals[_currentChannel] = _bridge.getProposals(_currentChannel);
-        _roomAuditLogs[_currentChannel] = _bridge.getAuditLog(_currentChannel);
-      }
-      _rooms = _bridge.getRooms();
+    if (success && _currentChannel.startsWith('room_')) {
+      _roomProposals[_currentChannel] = _bridge.getProposals(_currentChannel);
+      _roomAuditLogs[_currentChannel] = _bridge.getAuditLog(_currentChannel);
       notifyListeners();
     }
     return success;
   }
 
-  List<StewardVoteInfo> getProposals(String roomId) {
-    return _roomProposals[roomId] ?? _bridge.getProposals(roomId);
-  }
-
-  List<GovernanceEventInfo> getAuditLog(String roomId) {
-    return _roomAuditLogs[roomId] ?? _bridge.getAuditLog(roomId);
+  void refreshGovernance(String roomId) {
+    if (_bridge.isReady) {
+      _roomProposals[roomId] = _bridge.getProposals(roomId);
+      _roomAuditLogs[roomId] = _bridge.getAuditLog(roomId);
+      notifyListeners();
+    }
   }
 
   @override

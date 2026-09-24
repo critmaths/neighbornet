@@ -675,6 +675,84 @@ class _ChatViewState extends State<ChatView> {
                           );
                         }),
                       ],
+                      if (widget.state.peers.isNotEmpty) ...[
+                        const Divider(height: 20),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          child: Text(
+                            'DIRECT WHISPERS (E2EE)',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.2,
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        ...widget.state.peers.map((p) {
+                          final dmChannel = 'dm_${p.destHash}';
+                          final isSelected = widget.state.currentChannel == dmChannel;
+                          final unread = widget.state.getUnreadCount(dmChannel);
+
+                          return ListTile(
+                            dense: true,
+                            selected: isSelected,
+                            selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                            leading: Stack(
+                              children: [
+                                CircleAvatar(
+                                  radius: 12,
+                                  backgroundColor: Colors.blue.withValues(alpha: 0.15),
+                                  child: const Icon(Icons.lock_outline, size: 14, color: Colors.blue),
+                                ),
+                                Positioned(
+                                  right: 0,
+                                  bottom: 0,
+                                  child: Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            title: Text(
+                              p.nickname,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                              ),
+                            ),
+                            subtitle: Text(
+                              '${p.destHash.length > 8 ? p.destHash.substring(0, 8) : p.destHash}...',
+                              style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.grey),
+                            ),
+                            trailing: unread > 0
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.error,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      '$unread',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  )
+                                : null,
+                            onTap: () {
+                              widget.state.selectDirectMessage(p);
+                            },
+                          );
+                        }),
+                      ],
                     ],
                   ),
                 ),
@@ -698,40 +776,81 @@ class _ChatViewState extends State<ChatView> {
                     ),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Text(
-                      isCustomRoom ? '# ${currentRoom?.name ?? widget.state.currentChannel}' : '# ${widget.state.currentChannel}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    if (isCustomRoom && currentRoom != null) ...[
-                      const SizedBox(width: 12),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.shield_outlined, size: 14, color: Colors.indigo),
-                        label: Text(
-                          '${currentRoom.stewards.length} Stewards • Governance',
-                          style: const TextStyle(fontSize: 11, color: Colors.indigo),
+                child: Builder(
+                  builder: (context) {
+                    final isDm = widget.state.isDirectMessageChannel(widget.state.currentChannel);
+                    final dmPeer = isDm ? widget.state.getPeerForChannel(widget.state.currentChannel) : null;
+
+                    return Row(
+                      children: [
+                        if (isDm) ...[
+                          const Icon(Icons.lock_rounded, color: Colors.blue, size: 18),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Whisper: ${dmPeer?.nickname ?? widget.state.currentChannel.substring(3)}',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'E2EE',
+                              style: TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          if (dmPeer != null) ...[
+                            const SizedBox(width: 12),
+                            IconButton(
+                              icon: const Icon(Icons.phone_rounded, size: 18, color: Colors.green),
+                              tooltip: 'Voice Call ${dmPeer.nickname}',
+                              onPressed: () => widget.state.startCallWithPeer(dmPeer, withVideo: false),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.videocam_rounded, size: 18, color: Colors.blue),
+                              tooltip: 'Video Call ${dmPeer.nickname}',
+                              onPressed: () => widget.state.startCallWithPeer(dmPeer, withVideo: true),
+                            ),
+                          ],
+                        ] else ...[
+                          Text(
+                            isCustomRoom ? '# ${currentRoom?.name ?? widget.state.currentChannel}' : '# ${widget.state.currentChannel}',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          if (isCustomRoom && currentRoom != null) ...[
+                            const SizedBox(width: 12),
+                            OutlinedButton.icon(
+                              icon: const Icon(Icons.shield_outlined, size: 14, color: Colors.indigo),
+                              label: Text(
+                                '${currentRoom.stewards.length} Stewards • Governance',
+                                style: const TextStyle(fontSize: 11, color: Colors.indigo),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              onPressed: () => _showGovernanceDialog(currentRoom),
+                            ),
+                          ],
+                        ],
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.green.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'P2P Encrypted Mesh',
+                            style: TextStyle(fontSize: 11, color: Colors.green.shade800, fontWeight: FontWeight.w500),
+                          ),
                         ),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        onPressed: () => _showGovernanceDialog(currentRoom),
-                      ),
-                    ],
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        'P2P Encrypted Mesh',
-                        style: TextStyle(fontSize: 11, color: Colors.green.shade800, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
+                      ],
+                    );
+                  },
                 ),
               ),
 

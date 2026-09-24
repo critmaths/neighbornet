@@ -15,20 +15,26 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await TrayAndWindowService.instance.initialize();
   final state = NeighborNetState();
+  final voiceService = VoiceChatService();
+  state.attachVoiceChatService(voiceService);
   await state.initialize();
-  runApp(NeighborNetApp(state: state));
+  runApp(NeighborNetApp(state: state, voiceService: voiceService));
 }
 
 class NeighborNetApp extends StatelessWidget {
   final NeighborNetState state;
+  final VoiceChatService? voiceService;
 
-  const NeighborNetApp({super.key, required this.state});
+  const NeighborNetApp({super.key, required this.state, this.voiceService});
 
   @override
   Widget build(BuildContext context) {
+    final vService = voiceService ?? VoiceChatService();
+    state.attachVoiceChatService(vService);
+
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => VoiceChatService()),
+        ChangeNotifierProvider.value(value: vService),
       ],
       child: MaterialApp(
       title: 'NeighborNet',

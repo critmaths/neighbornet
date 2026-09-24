@@ -57,6 +57,8 @@ class _VoiceChatViewState extends State<VoiceChatView> {
     }
     _previousState = voiceService.state;
 
+    final peerName = voiceService.activePeerNickname ?? 'Mesh Peer';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Voice & Video Comms'),
@@ -76,8 +78,8 @@ class _VoiceChatViewState extends State<VoiceChatView> {
                   // Video Viewport Area (when video enabled and connected)
                   if (voiceService.state == CallState.connected && voiceService.isVideoEnabled)
                     Container(
-                      height: 240,
-                      width: 320,
+                      height: 260,
+                      width: 360,
                       margin: const EdgeInsets.only(bottom: 24),
                       decoration: BoxDecoration(
                         color: Colors.black,
@@ -105,7 +107,7 @@ class _VoiceChatViewState extends State<VoiceChatView> {
                               children: [
                                 Icon(Icons.videocam, color: Colors.greenAccent, size: 14),
                                 SizedBox(width: 4),
-                                Text('Local Cam', style: TextStyle(color: Colors.white, fontSize: 11)),
+                                Text('Camera Live', style: TextStyle(color: Colors.white, fontSize: 11)),
                               ],
                             ),
                           ),
@@ -113,7 +115,7 @@ class _VoiceChatViewState extends State<VoiceChatView> {
                       ),
                     )
                   else
-                    _buildStatusIndicator(voiceService.state, voiceService.isVideoEnabled),
+                    _buildStatusIndicator(voiceService.state, voiceService.isVideoEnabled, peerName),
 
                   const SizedBox(height: 16),
 
@@ -134,8 +136,8 @@ class _VoiceChatViewState extends State<VoiceChatView> {
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         decoration: BoxDecoration(
                           color: (voiceService.state == CallState.error
-                                  ? Theme.of(context).colorScheme.errorContainer
-                                  : Colors.amber.withValues(alpha: 0.2)),
+                              ? Theme.of(context).colorScheme.errorContainer
+                              : Colors.amber.withValues(alpha: 0.2)),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
@@ -164,7 +166,7 @@ class _VoiceChatViewState extends State<VoiceChatView> {
     );
   }
 
-  Widget _buildStatusIndicator(CallState state, bool isVideo) {
+  Widget _buildStatusIndicator(CallState state, bool isVideo, String peerName) {
     IconData icon;
     Color color;
     String text;
@@ -173,22 +175,22 @@ class _VoiceChatViewState extends State<VoiceChatView> {
       case CallState.idle:
         icon = Icons.mic_none_outlined;
         color = Colors.grey;
-        text = 'Ready to call';
+        text = 'Ready to Call (Mesh Standby)';
         break;
       case CallState.calling:
         icon = Icons.phone_forwarded;
         color = Colors.blue;
-        text = 'Connecting mesh call...';
+        text = 'Calling $peerName across mesh...';
         break;
       case CallState.ringing:
         icon = Icons.ring_volume;
         color = Colors.orange;
-        text = 'Ringing...';
+        text = 'Incoming Call from $peerName!';
         break;
       case CallState.connected:
         icon = isVideo ? Icons.videocam : Icons.record_voice_over;
         color = Colors.green;
-        text = isVideo ? 'Video Call Connected' : 'Voice Call Connected';
+        text = isVideo ? 'Video Call with $peerName' : 'Voice Call with $peerName';
         break;
       case CallState.error:
         icon = Icons.error_outline;
@@ -223,9 +225,9 @@ class _VoiceChatViewState extends State<VoiceChatView> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           ElevatedButton.icon(
-            onPressed: () => service.startCall('dummy_peer', withVideo: false),
+            onPressed: () => service.startCall('nearby_peer', peerNickname: 'Nearby Peer', withVideo: false),
             icon: const Icon(Icons.call),
-            label: const Text('Start Voice Call'),
+            label: const Text('Voice Call'),
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
               backgroundColor: Colors.green,
@@ -234,9 +236,9 @@ class _VoiceChatViewState extends State<VoiceChatView> {
           ),
           const SizedBox(width: 16),
           FilledButton.tonalIcon(
-            onPressed: () => service.startCall('dummy_peer', withVideo: true),
+            onPressed: () => service.startCall('nearby_peer', peerNickname: 'Nearby Peer', withVideo: true),
             icon: const Icon(Icons.videocam),
-            label: const Text('Start Video Call'),
+            label: const Text('Video Call'),
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
             ),
@@ -245,6 +247,49 @@ class _VoiceChatViewState extends State<VoiceChatView> {
       );
     }
 
+    // Incoming Call Ringing Controls
+    if (service.state == CallState.ringing) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'answerVoice',
+            onPressed: () => service.answerCall(withVideo: false),
+            backgroundColor: Colors.green,
+            icon: const Icon(Icons.call, color: Colors.white),
+            label: const Text('Answer Voice', style: TextStyle(color: Colors.white)),
+          ),
+          const SizedBox(width: 16),
+          FloatingActionButton.extended(
+            heroTag: 'answerVideo',
+            onPressed: () => service.answerCall(withVideo: true),
+            backgroundColor: Colors.blue,
+            icon: const Icon(Icons.videocam, color: Colors.white),
+            label: const Text('Answer Video', style: TextStyle(color: Colors.white)),
+          ),
+          const SizedBox(width: 16),
+          FloatingActionButton(
+            heroTag: 'declineCall',
+            onPressed: service.declineCall,
+            backgroundColor: Colors.red,
+            child: const Icon(Icons.call_end, color: Colors.white),
+          ),
+        ],
+      );
+    }
+
+    // Outgoing Calling State
+    if (service.state == CallState.calling) {
+      return FloatingActionButton.extended(
+        heroTag: 'cancelCalling',
+        onPressed: service.endCall,
+        backgroundColor: Colors.red,
+        icon: const Icon(Icons.call_end, color: Colors.white),
+        label: const Text('Cancel Call', style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    // Connected Call Controls
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
