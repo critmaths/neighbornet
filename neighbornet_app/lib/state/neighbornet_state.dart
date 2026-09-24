@@ -3,12 +3,17 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../models/neighbornet_models.dart';
 import '../services/neighbornet_bridge.dart';
+import '../services/notification_service.dart';
 
 class NeighborNetState extends ChangeNotifier {
   final NeighborNetBridge _bridge = NeighborNetBridge();
   Timer? _pollTimer;
 
   bool _isInitialized = false;
+  bool _isFirstRefresh = true;
+  final Set<String> _seenMessageIds = {};
+  final Set<String> _seenBulletinIds = {};
+
   NodeStatus? _status;
   List<PeerInfo> _peers = [];
   List<BulletinPost> _bulletins = [];
@@ -74,9 +79,37 @@ class NeighborNetState extends ChangeNotifier {
     _sharedFiles = _bridge.getSharedFiles();
     _rooms = _bridge.getRooms();
 
+    // Check for new bulletins to notify
+    for (final b in _bulletins) {
+      if (!_seenBulletinIds.contains(b.id)) {
+        _seenBulletinIds.add(b.id);
+        if (!_isFirstRefresh && _status?.destHash != null && b.authorHash != _status!.destHash) {
+          NotificationService.instance.showBulletinNotification(
+            title: b.title,
+            author: b.authorNickname,
+            urgency: b.urgency,
+          );
+        }
+      }
+    }
+
     // Refresh active channel messages
     final msgs = _bridge.getChatHistory(_currentChannel);
     _channelMessages[_currentChannel] = msgs;
+
+    // Check for new chat messages to notify
+    for (final msg in msgs) {
+      if (!_seenMessageIds.contains(msg.id)) {
+        _seenMessageIds.add(msg.id);
+        if (!_isFirstRefresh && _status?.destHash != null && msg.senderHash != _status!.destHash) {
+          NotificationService.instance.showMessageNotification(
+            senderNickname: msg.senderNickname,
+            channel: msg.channel,
+            content: msg.content,
+          );
+        }
+      }
+    }
 
     // Refresh room governance data if in a custom room
     if (_currentChannel.startsWith('room_')) {
@@ -84,6 +117,7 @@ class NeighborNetState extends ChangeNotifier {
       _roomAuditLogs[_currentChannel] = _bridge.getAuditLog(_currentChannel);
     }
 
+    _isFirstRefresh = false;
     notifyListeners();
   }
 

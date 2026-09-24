@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../services/notification_service.dart';
 import '../services/tray_and_window_service.dart';
 import '../state/neighbornet_state.dart';
 
@@ -218,6 +219,29 @@ class _SettingsViewState extends State<SettingsView> {
                         value: trayService.closeToTray,
                         onChanged: (val) {
                           trayService.setCloseToTray(val);
+                        },
+                      ),
+
+                      // Option 3: Desktop System Notifications
+                      ListenableBuilder(
+                        listenable: NotificationService.instance,
+                        builder: (context, _) {
+                          final notifService = NotificationService.instance;
+                          return SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text(
+                              'Desktop System Notifications',
+                              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                            ),
+                            subtitle: const Text(
+                              'Show native Windows alerts when new messages or emergency bulletins arrive while NeighborNet is in the background.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            value: notifService.enabled,
+                            onChanged: (val) {
+                              notifService.setEnabled(val);
+                            },
+                          );
                         },
                       ),
                     ],

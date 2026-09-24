@@ -49,6 +49,7 @@ void main() {
     expect(find.text('Minimize to System Tray'), findsOneWidget);
     expect(find.text('Minimize Just to Tray'), findsOneWidget);
     expect(find.text('Send to Tray When Closing (X)'), findsOneWidget);
+    expect(find.text('Desktop System Notifications'), findsOneWidget);
 
     // Clean up
     state.dispose();

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 import '../services/voice_chat_service.dart';
 
@@ -16,12 +17,6 @@ class _VoiceChatViewState extends State<VoiceChatView> {
   CallState _previousState = CallState.idle;
 
   @override
-  void initState() {
-    super.initState();
-    // Use addPostFrameCallback if we needed to trigger something after build
-  }
-
-  @override
   void dispose() {
     _callTimer?.cancel();
     super.dispose();
@@ -31,9 +26,11 @@ class _VoiceChatViewState extends State<VoiceChatView> {
     _secondsElapsed = 0;
     _callTimer?.cancel();
     _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _secondsElapsed++;
-      });
+      if (mounted) {
+        setState(() {
+          _secondsElapsed++;
+        });
+      }
     });
   }
 
@@ -50,8 +47,6 @@ class _VoiceChatViewState extends State<VoiceChatView> {
 
   @override
   Widget build(BuildContext context) {
-    // Note: Provider should be provided higher up in the widget tree,
-    // but for the sake of the view structure, we'll assume it's available.
     final voiceService = context.watch<VoiceChatService>();
 
     // Handle timer based on state transitions
@@ -64,10 +59,10 @@ class _VoiceChatViewState extends State<VoiceChatView> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Voice Chat'),
+        title: const Text('Voice & Video Comms'),
       ),
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Card(
             elevation: 4,
@@ -78,30 +73,85 @@ class _VoiceChatViewState extends State<VoiceChatView> {
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _buildStatusIndicator(voiceService.state),
-                  const SizedBox(height: 24),
-                  
+                  // Video Viewport Area (when video enabled and connected)
+                  if (voiceService.state == CallState.connected && voiceService.isVideoEnabled)
+                    Container(
+                      height: 240,
+                      width: 320,
+                      margin: const EdgeInsets.only(bottom: 24),
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Theme.of(context).colorScheme.primary, width: 2),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Stack(
+                        alignment: Alignment.bottomRight,
+                        children: [
+                          RTCVideoView(
+                            voiceService.localRenderer,
+                            mirror: true,
+                            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            margin: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.videocam, color: Colors.greenAccent, size: 14),
+                                SizedBox(width: 4),
+                                Text('Local Cam', style: TextStyle(color: Colors.white, fontSize: 11)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    _buildStatusIndicator(voiceService.state, voiceService.isVideoEnabled),
+
+                  const SizedBox(height: 16),
+
                   // Call timer display
                   if (voiceService.state == CallState.connected)
                     Text(
                       _formatDuration(_secondsElapsed),
                       style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                            fontWeight: FontWeight.bold,
+                          ),
                     ),
-                  
-                  // Error message display
-                  if (voiceService.state == CallState.error && voiceService.lastError.isNotEmpty)
+
+                  // Error / Fallback message display
+                  if (voiceService.lastError.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16.0),
-                      child: Text(
-                        voiceService.lastError,
-                        style: TextStyle(color: Theme.of(context).colorScheme.error),
-                        textAlign: TextAlign.center,
+                      padding: const EdgeInsets.symmetric(vertical: 12.0),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: (voiceService.state == CallState.error
+                                  ? Theme.of(context).colorScheme.errorContainer
+                                  : Colors.amber.withValues(alpha: 0.2)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          voiceService.lastError,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: voiceService.state == CallState.error
+                                ? Theme.of(context).colorScheme.error
+                                : Colors.amber.shade900,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ),
 
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 32),
 
                   // Controls
                   _buildControls(context, voiceService),
@@ -114,21 +164,21 @@ class _VoiceChatViewState extends State<VoiceChatView> {
     );
   }
 
-  Widget _buildStatusIndicator(CallState state) {
+  Widget _buildStatusIndicator(CallState state, bool isVideo) {
     IconData icon;
     Color color;
     String text;
 
     switch (state) {
       case CallState.idle:
-        icon = Icons.phone_android;
+        icon = Icons.mic_none_outlined;
         color = Colors.grey;
         text = 'Ready to call';
         break;
       case CallState.calling:
         icon = Icons.phone_forwarded;
         color = Colors.blue;
-        text = 'Calling...';
+        text = 'Connecting mesh call...';
         break;
       case CallState.ringing:
         icon = Icons.ring_volume;
@@ -136,14 +186,14 @@ class _VoiceChatViewState extends State<VoiceChatView> {
         text = 'Ringing...';
         break;
       case CallState.connected:
-        icon = Icons.record_voice_over;
+        icon = isVideo ? Icons.videocam : Icons.record_voice_over;
         color = Colors.green;
-        text = 'Connected';
+        text = isVideo ? 'Video Call Connected' : 'Voice Call Connected';
         break;
       case CallState.error:
         icon = Icons.error_outline;
         color = Colors.red;
-        text = 'Call Failed';
+        text = 'Call Interrupted';
         break;
     }
 
@@ -158,7 +208,7 @@ class _VoiceChatViewState extends State<VoiceChatView> {
         Text(
           text,
           style: TextStyle(
-            fontSize: 20,
+            fontSize: 18,
             color: color,
             fontWeight: FontWeight.w600,
           ),
@@ -169,15 +219,29 @@ class _VoiceChatViewState extends State<VoiceChatView> {
 
   Widget _buildControls(BuildContext context, VoiceChatService service) {
     if (service.state == CallState.idle || service.state == CallState.error) {
-      return ElevatedButton.icon(
-        onPressed: () => service.startCall('dummy_peer'),
-        icon: const Icon(Icons.call),
-        label: const Text('Start Test Call'),
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-          backgroundColor: Colors.green,
-          foregroundColor: Colors.white,
-        ),
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          ElevatedButton.icon(
+            onPressed: () => service.startCall('dummy_peer', withVideo: false),
+            icon: const Icon(Icons.call),
+            label: const Text('Start Voice Call'),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 16),
+          FilledButton.tonalIcon(
+            onPressed: () => service.startCall('dummy_peer', withVideo: true),
+            icon: const Icon(Icons.videocam),
+            label: const Text('Start Video Call'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+            ),
+          ),
+        ],
       );
     }
 
@@ -194,7 +258,18 @@ class _VoiceChatViewState extends State<VoiceChatView> {
             color: service.isMuted ? Colors.white : Colors.black87,
           ),
         ),
-        const SizedBox(width: 32),
+        const SizedBox(width: 24),
+        // Video Toggle
+        FloatingActionButton(
+          heroTag: 'videoBtn',
+          onPressed: service.toggleVideo,
+          backgroundColor: service.isVideoEnabled ? Theme.of(context).colorScheme.primary : Colors.grey[200],
+          child: Icon(
+            service.isVideoEnabled ? Icons.videocam : Icons.videocam_off,
+            color: service.isVideoEnabled ? Colors.white : Colors.black87,
+          ),
+        ),
+        const SizedBox(width: 24),
         // Hang Up
         FloatingActionButton(
           heroTag: 'hangupBtn',
