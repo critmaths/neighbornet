@@ -5,7 +5,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +13,7 @@ use base64::prelude::*;
 use parking_lot::RwLock;
 use rand_core::OsRng;
 use reticulum_rs::core::identity::{HashIdentity, PrivateIdentity};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -168,6 +169,7 @@ pub struct NodeInner {
     pub listen_port: u16,
     pub is_transport: bool,
     pub data_dir: PathBuf,
+    pub db: Mutex<Connection>,
     pub peers: RwLock<HashMap<String, PeerInfo>>,
     pub messages: RwLock<Vec<ChatMessage>>,
     pub bulletins: RwLock<HashMap<String, BulletinPost>>,
@@ -278,20 +280,87 @@ impl NeighborNode {
             }
         }
 
+        let db_path = data_dir.join("neighbornet.db");
+        let db = Connection::open(db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS messages (
+               id TEXT PRIMARY KEY,
+               channel TEXT NOT NULL,
+               sender_hash TEXT NOT NULL,
+               sender_nickname TEXT NOT NULL,
+               content TEXT NOT NULL,
+               timestamp_sec INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
+             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp_sec);
+             
+             CREATE TABLE IF NOT EXISTS bulletins (
+               id TEXT PRIMARY KEY,
+               author_hash TEXT NOT NULL,
+               author_nickname TEXT NOT NULL,
+               title TEXT NOT NULL,
+               content TEXT NOT NULL,
+               priority TEXT NOT NULL,
+               timestamp_sec INTEGER NOT NULL
+             );"
+        ).map_err(|e| format!("Failed to initialize DB schema: {}", e))?;
+
+        let mut loaded_messages = Vec::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec FROM messages ORDER BY timestamp_sec ASC") {
+            if let Ok(msg_iter) = stmt.query_map([], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    channel: row.get(1)?,
+                    sender_hash: row.get(2)?,
+                    sender_nickname: row.get(3)?,
+                    content: row.get(4)?,
+                    timestamp_sec: row.get(5)?,
+                })
+            }) {
+                for msg in msg_iter.flatten() {
+                    loaded_messages.push(msg);
+                }
+            }
+        }
+
+        let mut loaded_bulletins = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, author_hash, author_nickname, title, content, priority, timestamp_sec FROM bulletins") {
+            if let Ok(bull_iter) = stmt.query_map([], |row| {
+                Ok(BulletinPost {
+                    id: row.get(0)?,
+                    author_hash: row.get(1)?,
+                    author_nickname: row.get(2)?,
+                    title: row.get(3)?,
+                    body: row.get(4)?,
+                    urgency: row.get(5)?,
+                    timestamp_sec: row.get(6)?,
+                })
+            }) {
+                for bull in bull_iter.flatten() {
+                    loaded_bulletins.insert(bull.id.clone(), bull);
+                }
+            }
+        }
+
+        let mut seen_ids = HashSet::new();
+        for msg in &loaded_messages { seen_ids.insert(msg.id.clone()); }
+        for id in loaded_bulletins.keys() { seen_ids.insert(id.clone()); }
+
         let inner = Arc::new(NodeInner {
             dest_hash_hex,
             nickname: RwLock::new(default_nick),
             listen_port: bound_port,
             is_transport,
-            data_dir,
+            data_dir: data_dir.clone(),
+            db: Mutex::new(db),
             peers: RwLock::new(HashMap::new()),
-            messages: RwLock::new(Vec::new()),
-            bulletins: RwLock::new(HashMap::new()),
+            messages: RwLock::new(loaded_messages),
+            bulletins: RwLock::new(loaded_bulletins),
             files: RwLock::new(loaded_files),
             rooms: RwLock::new(loaded_rooms),
             proposals: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(HashMap::new()),
-            seen_ids: RwLock::new(HashSet::new()),
+            seen_ids: RwLock::new(seen_ids),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
             socket: socket_clone,
@@ -342,6 +411,21 @@ impl NeighborNode {
         self.inner.seen_ids.write().insert(id.clone());
         self.inner.bulletins.write().insert(id.clone(), post.clone());
 
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute(
+                "INSERT OR IGNORE INTO bulletins (id, author_hash, author_nickname, title, content, priority, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    post.id,
+                    post.author_hash,
+                    post.author_nickname,
+                    post.title,
+                    post.body,
+                    post.urgency,
+                    post.timestamp_sec
+                ]
+            );
+        }
+
         let envelope = WireEnvelope::Bulletin(post);
         self.broadcast_envelope(&envelope);
         id
@@ -364,25 +448,70 @@ impl NeighborNode {
         self.inner.seen_ids.write().insert(id.clone());
         self.inner.messages.write().push(chat.clone());
 
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute(
+                "INSERT OR IGNORE INTO messages (id, channel, sender_hash, sender_nickname, content, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    chat.id,
+                    chat.channel,
+                    chat.sender_hash,
+                    chat.sender_nickname,
+                    chat.content,
+                    chat.timestamp_sec
+                ]
+            );
+        }
+
         let envelope = WireEnvelope::Chat(chat);
         self.broadcast_envelope(&envelope);
         id
     }
 
     pub fn get_bulletins(&self) -> Vec<BulletinPost> {
-        let mut posts: Vec<BulletinPost> = self.inner.bulletins.read().values().cloned().collect();
-        posts.sort_by(|a, b| b.timestamp_sec.cmp(&a.timestamp_sec));
+        let mut posts = Vec::new();
+        if let Ok(db) = self.inner.db.lock() {
+            if let Ok(mut stmt) = db.prepare("SELECT id, author_hash, author_nickname, title, content, priority, timestamp_sec FROM bulletins ORDER BY timestamp_sec DESC") {
+                if let Ok(bull_iter) = stmt.query_map([], |row| {
+                    Ok(BulletinPost {
+                        id: row.get(0)?,
+                        author_hash: row.get(1)?,
+                        author_nickname: row.get(2)?,
+                        title: row.get(3)?,
+                        body: row.get(4)?,
+                        urgency: row.get(5)?,
+                        timestamp_sec: row.get(6)?,
+                    })
+                }) {
+                    for bull in bull_iter.flatten() {
+                        posts.push(bull);
+                    }
+                }
+            }
+        }
         posts
     }
 
     pub fn get_chat_history(&self, channel: &str) -> Vec<ChatMessage> {
-        self.inner
-            .messages
-            .read()
-            .iter()
-            .filter(|m| m.channel == channel)
-            .cloned()
-            .collect()
+        let mut msgs = Vec::new();
+        if let Ok(db) = self.inner.db.lock() {
+            if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec FROM messages WHERE channel = ?1 ORDER BY timestamp_sec ASC") {
+                if let Ok(msg_iter) = stmt.query_map(rusqlite::params![channel], |row| {
+                    Ok(ChatMessage {
+                        id: row.get(0)?,
+                        channel: row.get(1)?,
+                        sender_hash: row.get(2)?,
+                        sender_nickname: row.get(3)?,
+                        content: row.get(4)?,
+                        timestamp_sec: row.get(5)?,
+                    })
+                }) {
+                    for msg in msg_iter.flatten() {
+                        msgs.push(msg);
+                    }
+                }
+            }
+        }
+        msgs
     }
 
     pub fn get_peers(&self) -> Vec<PeerInfo> {
@@ -885,14 +1014,43 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             let mut seen = inner.seen_ids.write();
             if seen.insert(msg.id.clone()) {
                 let mut messages = inner.messages.write();
-                messages.push(msg);
+                messages.push(msg.clone());
+                
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "INSERT OR IGNORE INTO messages (id, channel, sender_hash, sender_nickname, content, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            msg.id,
+                            msg.channel,
+                            msg.sender_hash,
+                            msg.sender_nickname,
+                            msg.content,
+                            msg.timestamp_sec
+                        ]
+                    );
+                }
             }
         }
         WireEnvelope::Bulletin(post) => {
             let mut seen = inner.seen_ids.write();
             if seen.insert(post.id.clone()) {
                 let mut bulletins = inner.bulletins.write();
-                bulletins.insert(post.id.clone(), post);
+                bulletins.insert(post.id.clone(), post.clone());
+                
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "INSERT OR IGNORE INTO bulletins (id, author_hash, author_nickname, title, content, priority, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            post.id,
+                            post.author_hash,
+                            post.author_nickname,
+                            post.title,
+                            post.body,
+                            post.urgency,
+                            post.timestamp_sec
+                        ]
+                    );
+                }
             }
         }
         WireEnvelope::SyncRequest {
@@ -943,7 +1101,22 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             let mut stored_b = inner.bulletins.write();
             for b in bulletins {
                 if seen.insert(b.id.clone()) {
-                    stored_b.insert(b.id.clone(), b);
+                    stored_b.insert(b.id.clone(), b.clone());
+                    
+                    if let Ok(db) = inner.db.lock() {
+                        let _ = db.execute(
+                            "INSERT OR IGNORE INTO bulletins (id, author_hash, author_nickname, title, content, priority, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                            rusqlite::params![
+                                b.id,
+                                b.author_hash,
+                                b.author_nickname,
+                                b.title,
+                                b.body,
+                                b.urgency,
+                                b.timestamp_sec
+                            ]
+                        );
+                    }
                 }
             }
 

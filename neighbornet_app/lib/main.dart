@@ -6,6 +6,9 @@ import 'views/bulletin_view.dart';
 import 'views/people_view.dart';
 import 'views/emergency_view.dart';
 import 'views/settings_view.dart';
+import 'views/voice_chat_view.dart';
+import 'services/voice_chat_service.dart';
+import 'package:provider/provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +25,11 @@ class NeighborNetApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => VoiceChatService()),
+      ],
+      child: MaterialApp(
       title: 'NeighborNet',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -41,6 +48,7 @@ class NeighborNetApp extends StatelessWidget {
       ),
       themeMode: ThemeMode.system,
       home: MainShell(state: state),
+    ),
     );
   }
 }
@@ -165,6 +173,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('People & Nodes'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.phone_outlined),
+                    selectedIcon: Icon(Icons.phone),
+                    label: Text('Voice Chat'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.shield_outlined),
                     selectedIcon: Icon(Icons.shield, color: Colors.red),
                     label: Text('Emergency Mode'),
@@ -199,8 +212,10 @@ class _MainShellState extends State<MainShell> {
       case 2:
         return PeopleView(state: widget.state);
       case 3:
-        return EmergencyView(state: widget.state);
+        return const VoiceChatView();
       case 4:
+        return EmergencyView(state: widget.state);
+      case 5:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

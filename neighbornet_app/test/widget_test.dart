@@ -22,6 +22,7 @@ void main() {
     expect(find.text('Chat'), findsOneWidget);
     expect(find.text('Bulletin'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
+    expect(find.text('Voice Chat'), findsOneWidget);
     expect(find.text('Emergency Mode'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
 

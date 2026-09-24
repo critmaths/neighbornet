@@ -587,6 +587,7 @@ dependencies = [
  "parking_lot",
  "rand_core",
  "reticulum-rs",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

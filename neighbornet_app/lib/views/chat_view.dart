@@ -125,7 +125,6 @@ class _ChatViewState extends State<ChatView> {
         builder: (ctx, setDialogState) {
           final proposals = widget.state.getProposals(room.id);
           final auditLog = widget.state.getAuditLog(room.id);
-          final peers = widget.state.peers;
 
           return AlertDialog(
             title: Row(
