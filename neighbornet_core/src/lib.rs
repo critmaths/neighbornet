@@ -1,3 +1,5 @@
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::uninlined_format_args, clippy::type_complexity)]
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -571,7 +573,7 @@ impl NeighborNode {
         let chunk_count = if file_bytes.is_empty() {
             1
         } else {
-            (file_bytes.len() + FILE_CHUNK_SIZE - 1) / FILE_CHUNK_SIZE
+            file_bytes.len().div_ceil(FILE_CHUNK_SIZE)
         };
 
         let comp_dir = self.inner.data_dir.join("files").join("completed").join(&file_hash);
@@ -618,7 +620,7 @@ impl NeighborNode {
 
     pub fn get_shared_files(&self) -> Vec<SharedFileMeta> {
         let mut list: Vec<SharedFileMeta> = self.inner.files.read().values().cloned().collect();
-        list.sort_by(|a, b| b.timestamp_sec.cmp(&a.timestamp_sec));
+        list.sort_by_key(|a| std::cmp::Reverse(a.timestamp_sec));
         list
     }
 
@@ -708,7 +710,7 @@ impl NeighborNode {
 
     pub fn get_rooms(&self) -> Vec<RoomMeta> {
         let mut list: Vec<RoomMeta> = self.inner.rooms.read().values().cloned().collect();
-        list.sort_by(|a, b| a.created_sec.cmp(&b.created_sec));
+        list.sort_by_key(|a| a.created_sec);
         list
     }
 
