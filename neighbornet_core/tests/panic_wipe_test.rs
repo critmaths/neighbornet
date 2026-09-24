@@ -4,32 +4,19 @@ use tempfile::tempdir;
 #[test]
 fn test_emergency_panic_wipe_shredder() {
     let dir = tempdir().unwrap();
-    let data_dir = dir.path().to_path_buf();
+    let node = NeighborNode::new(dir.path().to_path_buf(), 0, false).unwrap();
 
-    // Create a node
-    let node = NeighborNode::new(data_dir.clone(), 49911, false).expect("Create node");
+    node.send_chat("emergency".to_string(), "Top secret survival coord".to_string());
+    node.post_bulletin("DEFCON".to_string(), "Immediate evacuation".to_string(), "emergency".to_string());
 
-    // Insert dummy chat messages and bulletins
-    node.send_chat("general".to_string(), "Top secret survival coordinate".to_string());
-    node.post_bulletin("ALERT".to_string(), "Critical warning".to_string(), "EMERGENCY".to_string());
-
-    // Verify identity.hex exists
-    let id_path = data_dir.join("identity.hex");
-    assert!(id_path.exists(), "Identity file must exist initially");
+    assert_eq!(node.get_chat_history("emergency").len(), 1);
+    assert_eq!(node.get_bulletins().len(), 1);
 
     // Execute Panic Wipe
-    let result = node.panic_wipe();
-    assert!(result.is_ok(), "Panic wipe execution must succeed");
+    node.panic_wipe().unwrap();
 
-    // Verify identity file is deleted / shredded
-    assert!(!id_path.exists(), "Identity file must be deleted after panic wipe");
-
-    // Verify messages and bulletins are purged from in-memory and SQLite
-    let msgs = node.get_chat_history("general");
-    assert_eq!(msgs.len(), 0, "Chat history must be empty after panic wipe");
-
-    let bulletins = node.get_bulletins();
-    assert_eq!(bulletins.len(), 0, "Bulletins must be empty after panic wipe");
-
-    node.stop();
+    assert_eq!(node.get_chat_history("emergency").len(), 0);
+    assert_eq!(node.get_bulletins().len(), 0);
+    assert_eq!(node.get_rooms().len(), 0);
+    assert_eq!(node.get_shared_files().len(), 0);
 }

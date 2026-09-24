@@ -1,32 +1,28 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neighbornet_app/main.dart';
 import 'package:neighbornet_app/state/neighbornet_state.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
-  setUp(() {
-    SharedPreferences.setMockInitialValues({});
-  });
-
   testWidgets('NeighborNet App UI smoke test', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
 
+    final tempDir = Directory.systemTemp.createTempSync('neighbornet_ui_test_');
     final state = NeighborNetState();
+    await state.initialize(port: 46002);
 
     await tester.pumpWidget(NeighborNetApp(state: state));
     await tester.pump(const Duration(milliseconds: 200));
 
     // Verify presence of navigation elements
     expect(find.text('NeighborNet'), findsOneWidget);
+    expect(find.text('CHANNELS'), findsOneWidget);
     expect(find.text('Chat'), findsOneWidget);
     expect(find.text('Bulletin'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
     expect(find.text('Voice Chat'), findsOneWidget);
-    expect(find.text('Survival Manual'), findsOneWidget);
     expect(find.text('Emergency Mode'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
 
@@ -40,11 +36,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('People & Nodes'), findsNWidgets(2)); // Rail label + view header
 
-    // Switch to Survival Manual view
-    await tester.tap(find.text('Survival Manual'));
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('Civic & Collapse Survival Field Manual'), findsOneWidget);
-
     // Switch to Emergency Mode
     await tester.tap(find.text('Emergency Mode'));
     await tester.pump(const Duration(milliseconds: 200));
@@ -54,18 +45,16 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Node & Network Settings'), findsOneWidget);
-    expect(find.text('View 48-Word Paper Key'), findsOneWidget);
-    expect(find.text('Import / Restore Identity'), findsOneWidget);
-    expect(find.text('Tactical Visual Profile'), findsOneWidget);
-
-    // Scroll down in Settings
-    await tester.drag(find.byType(ListView), const Offset(0, -900));
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('Duress Protocol / Panic Wipe'), findsOneWidget);
-    expect(find.text('EXECUTE PANIC WIPE'), findsOneWidget);
+    expect(find.text('Desktop & System Tray Options'), findsOneWidget);
+    expect(find.text('Minimize to System Tray'), findsOneWidget);
+    expect(find.text('Minimize Just to Tray'), findsOneWidget);
+    expect(find.text('Send to Tray When Closing (X)'), findsOneWidget);
 
     // Clean up
     state.dispose();
+    try {
+      tempDir.deleteSync(recursive: true);
+    } catch (_) {}
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
   });

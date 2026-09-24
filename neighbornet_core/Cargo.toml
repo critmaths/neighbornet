@@ -23,6 +23,7 @@ base64 = "0.22"
 socket2 = "0.5"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 bip39 = "2.0"
+serialport = "4.7"
 
 [dev-dependencies]
 tempfile = "3.8"

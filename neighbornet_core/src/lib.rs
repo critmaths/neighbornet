@@ -1,7 +1,9 @@
-#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::uninlined_format_args, clippy::type_complexity)]
+pub mod kiss;
+pub mod lora;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
+
 use std::fs;
 use std::net::{SocketAddr, UdpSocket};
 use std::os::raw::c_char;
@@ -183,7 +185,9 @@ pub struct NodeInner {
     pub running: AtomicBool,
     pub start_time: Instant,
     pub socket: UdpSocket,
+    pub lora_manager: Arc<lora::LoraManager>,
 }
+
 
 pub struct NeighborNode {
     pub inner: Arc<NodeInner>,
@@ -348,6 +352,8 @@ impl NeighborNode {
         for msg in &loaded_messages { seen_ids.insert(msg.id.clone()); }
         for id in loaded_bulletins.keys() { seen_ids.insert(id.clone()); }
 
+        let lora_mgr = Arc::new(lora::LoraManager::new());
+
         let inner = Arc::new(NodeInner {
             dest_hash_hex,
             nickname: RwLock::new(default_nick),
@@ -366,12 +372,24 @@ impl NeighborNode {
             running: AtomicBool::new(true),
             start_time: Instant::now(),
             socket: socket_clone,
+            lora_manager: lora_mgr,
         });
+
+        // Set LoRa packet reception callback
+        let inner_rx = inner.clone();
+        let socket_lora = socket.try_clone().unwrap();
+        inner.lora_manager.set_packet_callback(Arc::new(move |payload: Vec<u8>| {
+            if let Ok(envelope) = serde_json::from_slice::<WireEnvelope>(&payload) {
+                let fake_src = SocketAddr::from(([127, 0, 0, 1], 42424));
+                handle_envelope(&inner_rx, &socket_lora, envelope, fake_src);
+            }
+        }));
 
         start_network_threads(inner.clone(), socket);
 
         Ok(Self { inner })
     }
+
 
     pub fn stop(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
@@ -547,8 +565,10 @@ impl NeighborNode {
                     let _ = self.inner.socket.send_to(json.as_bytes(), dest);
                 }
             }
+            let _ = self.inner.lora_manager.send_packet(json.as_bytes());
         }
     }
+
 
     // --- DECENTRALIZED FILE SHARING SUBSYSTEM ---
 
@@ -1859,3 +1879,80 @@ pub extern "C" fn neighbornet_restore_identity(phrase_or_hex_c: *const c_char) -
         Err(_) => std::ptr::null_mut(),
     }
 }
+
+// --- LORA TACTICAL RADIO FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_list_serial_ports_json() -> *mut c_char {
+    let list = lora::LoraManager::list_serial_ports();
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_connect_lora(
+    port_name_c: *const c_char,
+    baud_rate: u32,
+    freq_hz: u32,
+    bw_hz: u32,
+    sf: u8,
+    cr: u8,
+) -> bool {
+    if port_name_c.is_null() {
+        return false;
+    }
+    let port_name = unsafe { CStr::from_ptr(port_name_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.inner
+        .lora_manager
+        .connect(&port_name, baud_rate, freq_hz, bw_hz, sf, cr)
+        .is_ok()
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_disconnect_lora() -> bool {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.inner.lora_manager.disconnect();
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_lora_status_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    let status = node.inner.lora_manager.get_status();
+    let json = serde_json::to_string(&status).unwrap_or_default();
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_send_lora_packet(data_c: *const c_char) -> bool {
+    if data_c.is_null() {
+        return false;
+    }
+    let data = unsafe { CStr::from_ptr(data_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.inner.lora_manager.send_packet(data.as_bytes())
+}
+
