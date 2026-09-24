@@ -95,3 +95,7 @@ flutter test
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Care To Donate?
+
+https://buy.stripe.com/eVq8wQcma4RCctIgsf2Ji04
