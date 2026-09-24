@@ -12,6 +12,7 @@ class NeighborNetState extends ChangeNotifier {
   NodeStatus? _status;
   List<PeerInfo> _peers = [];
   List<BulletinPost> _bulletins = [];
+  List<SharedFileInfo> _sharedFiles = [];
   final Map<String, List<ChatMessage>> _channelMessages = {};
 
   String _currentChannel = 'general';
@@ -21,6 +22,7 @@ class NeighborNetState extends ChangeNotifier {
   NodeStatus? get status => _status;
   List<PeerInfo> get peers => _peers;
   List<BulletinPost> get bulletins => _bulletins;
+  List<SharedFileInfo> get sharedFiles => _sharedFiles;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -65,6 +67,7 @@ class NeighborNetState extends ChangeNotifier {
     _status = _bridge.getStatus();
     _peers = _bridge.getPeers();
     _bulletins = _bridge.getBulletins();
+    _sharedFiles = _bridge.getSharedFiles();
 
     // Refresh active channel messages
     final msgs = _bridge.getChatHistory(_currentChannel);
@@ -112,6 +115,28 @@ class NeighborNetState extends ChangeNotifier {
       notifyListeners();
     }
     return success;
+  }
+
+  String? publishFile(String path, String description) {
+    final hash = _bridge.publishFile(path, description);
+    if (hash != null) {
+      _sharedFiles = _bridge.getSharedFiles();
+      notifyListeners();
+    }
+    return hash;
+  }
+
+  bool requestFile(String fileHash) {
+    final success = _bridge.requestFile(fileHash);
+    if (success) {
+      _sharedFiles = _bridge.getSharedFiles();
+      notifyListeners();
+    }
+    return success;
+  }
+
+  String? getCompletedFilePath(String fileHash) {
+    return _bridge.getCompletedFilePath(fileHash);
   }
 
   @override

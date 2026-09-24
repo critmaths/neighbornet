@@ -29,6 +29,15 @@ typedef _DartPostBulletin = bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<
 typedef _NativeFreeString = Void Function(Pointer<Utf8>);
 typedef _DartFreeString = void Function(Pointer<Utf8>);
 
+typedef _NativePublishFile = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartPublishFile = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+
+typedef _NativeRequestFile = Bool Function(Pointer<Utf8>);
+typedef _DartRequestFile = bool Function(Pointer<Utf8>);
+
+typedef _NativeGetFilePath = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DartGetFilePath = Pointer<Utf8> Function(Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -47,6 +56,11 @@ class NeighborNetBridge {
   late _DartPostBulletin _postBulletin;
   late _DartGetJson _getBulletinsJson;
   late _DartFreeString _freeString;
+
+  late _DartPublishFile _publishFile;
+  late _DartGetJson _getSharedFilesJson;
+  late _DartRequestFile _requestFile;
+  late _DartGetFilePath _getFilePath;
 
   bool get isReady => _isInitialized;
 
@@ -92,6 +106,11 @@ class NeighborNetBridge {
     _postBulletin = _dylib!.lookupFunction<_NativePostBulletin, _DartPostBulletin>('neighbornet_post_bulletin');
     _getBulletinsJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_bulletins_json');
     _freeString = _dylib!.lookupFunction<_NativeFreeString, _DartFreeString>('neighbornet_free_string');
+
+    _publishFile = _dylib!.lookupFunction<_NativePublishFile, _DartPublishFile>('neighbornet_publish_file');
+    _getSharedFilesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_shared_files_json');
+    _requestFile = _dylib!.lookupFunction<_NativeRequestFile, _DartRequestFile>('neighbornet_request_file');
+    _getFilePath = _dylib!.lookupFunction<_NativeGetFilePath, _DartGetFilePath>('neighbornet_get_file_path');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -202,6 +221,63 @@ class NeighborNetBridge {
       return list.map((item) => BulletinPost.fromJson(item as Map<String, dynamic>)).toList();
     } finally {
       _freeString(ptr);
+    }
+  }
+
+  String? publishFile(String filePath, String description) {
+    if (!_isInitialized) return null;
+    final pathPtr = filePath.toNativeUtf8();
+    final descPtr = description.toNativeUtf8();
+    try {
+      final ptr = _publishFile(pathPtr, descPtr);
+      if (ptr == nullptr) return null;
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(pathPtr);
+      calloc.free(descPtr);
+    }
+  }
+
+  List<SharedFileInfo> getSharedFiles() {
+    if (!_isInitialized) return [];
+    final ptr = _getSharedFilesJson();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => SharedFileInfo.fromJson(item as Map<String, dynamic>)).toList();
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  bool requestFile(String fileHash) {
+    if (!_isInitialized) return false;
+    final hashPtr = fileHash.toNativeUtf8();
+    try {
+      return _requestFile(hashPtr);
+    } finally {
+      calloc.free(hashPtr);
+    }
+  }
+
+  String? getCompletedFilePath(String fileHash) {
+    if (!_isInitialized) return null;
+    final hashPtr = fileHash.toNativeUtf8();
+    try {
+      final ptr = _getFilePath(hashPtr);
+      if (ptr == nullptr) return null;
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(hashPtr);
     }
   }
 }

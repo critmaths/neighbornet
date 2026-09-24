@@ -9,11 +9,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::prelude::*;
 use parking_lot::RwLock;
 use rand_core::OsRng;
 use reticulum_rs::core::identity::{HashIdentity, PrivateIdentity};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+pub const FILE_CHUNK_SIZE: usize = 8192; // 8 KB content-addressed chunks
 
 // --- DATA STRUCTURES ---
 
@@ -47,6 +50,20 @@ pub struct BulletinPost {
     pub timestamp_sec: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SharedFileMeta {
+    pub file_hash: String,
+    pub filename: String,
+    pub file_size: u64,
+    pub chunk_count: usize,
+    pub chunk_size: usize,
+    pub description: String,
+    pub author_hash: String,
+    pub author_nickname: String,
+    pub timestamp_sec: u64,
+    pub is_complete: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "kind")]
 pub enum WireEnvelope {
@@ -55,14 +72,27 @@ pub enum WireEnvelope {
         nickname: String,
         is_transport: bool,
         bulletin_count: usize,
+        file_count: usize,
     },
     Chat(ChatMessage),
     Bulletin(BulletinPost),
     SyncRequest {
         known_bulletin_ids: Vec<String>,
+        known_file_hashes: Vec<String>,
     },
     SyncResponse {
         bulletins: Vec<BulletinPost>,
+        files: Vec<SharedFileMeta>,
+    },
+    FileAnnounce(SharedFileMeta),
+    FileChunkRequest {
+        file_hash: String,
+        chunk_index: usize,
+    },
+    FileChunkResponse {
+        file_hash: String,
+        chunk_index: usize,
+        chunk_data_base64: String,
     },
 }
 
@@ -74,6 +104,7 @@ pub struct NodeStatus {
     pub is_transport: bool,
     pub peer_count: usize,
     pub bulletin_count: usize,
+    pub file_count: usize,
     pub uptime_sec: u64,
 }
 
@@ -88,6 +119,7 @@ pub struct NodeInner {
     pub peers: RwLock<HashMap<String, PeerInfo>>,
     pub messages: RwLock<Vec<ChatMessage>>,
     pub bulletins: RwLock<HashMap<String, BulletinPost>>,
+    pub files: RwLock<HashMap<String, SharedFileMeta>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -124,7 +156,7 @@ fn load_or_create_identity(data_dir: &Path) -> (PrivateIdentity, String) {
     // Generate new cryptographic identity via Reticulum-rs
     let identity = PrivateIdentity::new_from_rand(OsRng);
     let hash_hex = hex::encode(identity.as_address_hash_slice());
-    
+
     // Persist private key
     let hex_str = hex::encode(identity.to_private_key_bytes());
     let _ = fs::write(key_path, hex_str);
@@ -135,6 +167,10 @@ fn load_or_create_identity(data_dir: &Path) -> (PrivateIdentity, String) {
 impl NeighborNode {
     pub fn new(data_dir: PathBuf, listen_port: u16, is_transport: bool) -> Result<Self, String> {
         let _ = fs::create_dir_all(&data_dir);
+        let _ = fs::create_dir_all(data_dir.join("files").join("meta"));
+        let _ = fs::create_dir_all(data_dir.join("files").join("chunks"));
+        let _ = fs::create_dir_all(data_dir.join("files").join("completed"));
+
         let (_, dest_hash_hex) = load_or_create_identity(&data_dir);
 
         let bind_addr = format!("0.0.0.0:{}", listen_port);
@@ -151,6 +187,28 @@ impl NeighborNode {
 
         let default_nick = format!("Neighbor-{}", &dest_hash_hex[..4]);
         let socket_clone = socket.try_clone().map_err(|e| format!("Clone socket failed: {e}"))?;
+
+        // Load existing saved files
+        let mut loaded_files = HashMap::new();
+        let meta_dir = data_dir.join("files").join("meta");
+        if let Ok(entries) = fs::read_dir(&meta_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("json") {
+                    if let Ok(content) = fs::read_to_string(entry.path()) {
+                        if let Ok(mut meta) = serde_json::from_str::<SharedFileMeta>(&content) {
+                            let comp_path = data_dir
+                                .join("files")
+                                .join("completed")
+                                .join(&meta.file_hash)
+                                .join(&meta.filename);
+                            meta.is_complete = comp_path.exists();
+                            loaded_files.insert(meta.file_hash.clone(), meta);
+                        }
+                    }
+                }
+            }
+        }
+
         let inner = Arc::new(NodeInner {
             dest_hash_hex,
             nickname: RwLock::new(default_nick),
@@ -160,6 +218,7 @@ impl NeighborNode {
             peers: RwLock::new(HashMap::new()),
             messages: RwLock::new(Vec::new()),
             bulletins: RwLock::new(HashMap::new()),
+            files: RwLock::new(loaded_files),
             seen_ids: RwLock::new(HashSet::new()),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -183,6 +242,7 @@ impl NeighborNode {
             is_transport: self.inner.is_transport,
             peer_count: self.inner.peers.read().len(),
             bulletin_count: self.inner.bulletins.read().len(),
+            file_count: self.inner.files.read().len(),
             uptime_sec: self.inner.start_time.elapsed().as_secs(),
         }
     }
@@ -279,14 +339,160 @@ impl NeighborNode {
 
     pub fn connect_peer(&self, addr: SocketAddr) {
         let b_count = self.inner.bulletins.read().len();
+        let f_count = self.inner.files.read().len();
         let announce = WireEnvelope::Announce {
             dest_hash: self.inner.dest_hash_hex.clone(),
             nickname: self.inner.nickname.read().clone(),
             is_transport: self.inner.is_transport,
             bulletin_count: b_count,
+            file_count: f_count,
         };
         if let Ok(payload) = serde_json::to_string(&announce) {
             let _ = self.inner.socket.send_to(payload.as_bytes(), addr);
+        }
+    }
+
+    // --- DECENTRALIZED FILE SHARING SUBSYSTEM ---
+
+    pub fn publish_file(&self, src_path: &Path, description: String) -> Result<String, String> {
+        if !src_path.exists() {
+            return Err("File not found on local filesystem".to_string());
+        }
+
+        let file_bytes = fs::read(src_path).map_err(|e| format!("Failed to read file: {e}"))?;
+        let file_size = file_bytes.len() as u64;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&file_bytes);
+        let file_hash = hex::encode(hasher.finalize());
+
+        let filename = src_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("document")
+            .to_string();
+
+        let chunk_count = if file_bytes.is_empty() {
+            1
+        } else {
+            (file_bytes.len() + FILE_CHUNK_SIZE - 1) / FILE_CHUNK_SIZE
+        };
+
+        // Persist full assembled file
+        let comp_dir = self.inner.data_dir.join("files").join("completed").join(&file_hash);
+        let _ = fs::create_dir_all(&comp_dir);
+        let comp_path = comp_dir.join(&filename);
+        let _ = fs::write(&comp_path, &file_bytes);
+
+        // Store individual chunks
+        let chunk_dir = self.inner.data_dir.join("files").join("chunks").join(&file_hash);
+        let _ = fs::create_dir_all(&chunk_dir);
+        if file_bytes.is_empty() {
+            let _ = fs::write(chunk_dir.join("0"), b"");
+        } else {
+            for (idx, chunk) in file_bytes.chunks(FILE_CHUNK_SIZE).enumerate() {
+                let _ = fs::write(chunk_dir.join(idx.to_string()), chunk);
+            }
+        }
+
+        let meta = SharedFileMeta {
+            file_hash: file_hash.clone(),
+            filename,
+            file_size,
+            chunk_count,
+            chunk_size: FILE_CHUNK_SIZE,
+            description,
+            author_hash: self.inner.dest_hash_hex.clone(),
+            author_nickname: self.inner.nickname.read().clone(),
+            timestamp_sec: current_epoch_sec(),
+            is_complete: true,
+        };
+
+        // Persist metadata
+        let meta_dir = self.inner.data_dir.join("files").join("meta");
+        let _ = fs::create_dir_all(&meta_dir);
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = fs::write(meta_dir.join(format!("{}.json", file_hash)), json);
+        }
+
+        self.inner.files.write().insert(file_hash.clone(), meta.clone());
+
+        // Broadcast file announcement across local network and peers
+        let envelope = WireEnvelope::FileAnnounce(meta);
+        if let Ok(json) = serde_json::to_string(&envelope) {
+            let _ = self.inner.socket.send_to(json.as_bytes(), "255.255.255.255:42424");
+            let _ = self.inner.socket.send_to(json.as_bytes(), "127.0.0.1:42424");
+            let peer_addrs: Vec<String> = self.inner.peers.read().values().map(|p| p.addr.clone()).collect();
+            for addr in peer_addrs {
+                if let Ok(dest) = addr.parse::<SocketAddr>() {
+                    let _ = self.inner.socket.send_to(json.as_bytes(), dest);
+                }
+            }
+        }
+
+        Ok(file_hash)
+    }
+
+    pub fn get_shared_files(&self) -> Vec<SharedFileMeta> {
+        let mut list: Vec<SharedFileMeta> = self.inner.files.read().values().cloned().collect();
+        list.sort_by(|a, b| b.timestamp_sec.cmp(&a.timestamp_sec));
+        list
+    }
+
+    pub fn request_file(&self, file_hash: &str) -> bool {
+        let files_guard = self.inner.files.read();
+        let meta = match files_guard.get(file_hash) {
+            Some(m) => m.clone(),
+            None => return false,
+        };
+        drop(files_guard);
+
+        if meta.is_complete {
+            return true;
+        }
+
+        let chunk_dir = self.inner.data_dir.join("files").join("chunks").join(file_hash);
+        for idx in 0..meta.chunk_count {
+            let chunk_path = chunk_dir.join(idx.to_string());
+            if !chunk_path.exists() {
+                let req = WireEnvelope::FileChunkRequest {
+                    file_hash: file_hash.to_string(),
+                    chunk_index: idx,
+                };
+                if let Ok(json) = serde_json::to_string(&req) {
+                    let peer_addrs: Vec<String> = self.inner.peers.read().values().map(|p| p.addr.clone()).collect();
+                    for addr in peer_addrs {
+                        if let Ok(dest) = addr.parse::<SocketAddr>() {
+                            let _ = self.inner.socket.send_to(json.as_bytes(), dest);
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn get_completed_file_path(&self, file_hash: &str) -> Option<PathBuf> {
+        let files_guard = self.inner.files.read();
+        let meta = files_guard.get(file_hash)?;
+        if !meta.is_complete {
+            return None;
+        }
+
+        let comp_path = self
+            .inner
+            .data_dir
+            .join("files")
+            .join("completed")
+            .join(file_hash)
+            .join(&meta.filename);
+
+        if comp_path.exists() {
+            Some(comp_path)
+        } else {
+            None
         }
     }
 }
@@ -333,11 +539,13 @@ fn start_network_threads(inner: Arc<NodeInner>, socket: UdpSocket) {
             }
 
             let b_count = inner_tx.bulletins.read().len();
+            let f_count = inner_tx.files.read().len();
             let announce = WireEnvelope::Announce {
                 dest_hash: inner_tx.dest_hash_hex.clone(),
                 nickname: inner_tx.nickname.read().clone(),
                 is_transport: inner_tx.is_transport,
                 bulletin_count: b_count,
+                file_count: f_count,
             };
 
             if let Ok(payload) = serde_json::to_string(&announce) {
@@ -364,6 +572,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             nickname,
             is_transport,
             bulletin_count,
+            file_count,
         } => {
             if dest_hash == inner.dest_hash_hex {
                 return;
@@ -382,24 +591,30 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 },
             );
 
-            // If this peer is newly discovered, immediately respond with our own announcement
+            // Respond immediately if newly discovered peer
             if is_new {
                 let my_announce = WireEnvelope::Announce {
                     dest_hash: inner.dest_hash_hex.clone(),
                     nickname: inner.nickname.read().clone(),
                     is_transport: inner.is_transport,
                     bulletin_count: inner.bulletins.read().len(),
+                    file_count: inner.files.read().len(),
                 };
                 if let Ok(json) = serde_json::to_string(&my_announce) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
             }
 
-            // Sync missing bulletins
+            // Sync missing bulletins and file manifests
             let my_b_count = inner.bulletins.read().len();
-            if is_new || bulletin_count > my_b_count {
-                let known_ids: Vec<String> = inner.bulletins.read().keys().cloned().collect();
-                let sync_req = WireEnvelope::SyncRequest { known_bulletin_ids: known_ids };
+            let my_f_count = inner.files.read().len();
+            if is_new || bulletin_count > my_b_count || file_count > my_f_count {
+                let known_b_ids: Vec<String> = inner.bulletins.read().keys().cloned().collect();
+                let known_f_hashes: Vec<String> = inner.files.read().keys().cloned().collect();
+                let sync_req = WireEnvelope::SyncRequest {
+                    known_bulletin_ids: known_b_ids,
+                    known_file_hashes: known_f_hashes,
+                };
                 if let Ok(json) = serde_json::to_string(&sync_req) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
@@ -419,29 +634,167 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 bulletins.insert(post.id.clone(), post);
             }
         }
-        WireEnvelope::SyncRequest { known_bulletin_ids } => {
-            let known_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
+        WireEnvelope::SyncRequest {
+            known_bulletin_ids,
+            known_file_hashes,
+        } => {
+            let known_b_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
             let missing_bulletins: Vec<BulletinPost> = inner
                 .bulletins
                 .read()
                 .values()
-                .filter(|b| !known_set.contains(&b.id))
+                .filter(|b| !known_b_set.contains(&b.id))
                 .cloned()
                 .collect();
 
-            if !missing_bulletins.is_empty() {
-                let resp = WireEnvelope::SyncResponse { bulletins: missing_bulletins };
+            let known_f_set: HashSet<String> = known_file_hashes.into_iter().collect();
+            let missing_files: Vec<SharedFileMeta> = inner
+                .files
+                .read()
+                .values()
+                .filter(|f| !known_f_set.contains(&f.file_hash))
+                .cloned()
+                .collect();
+
+            if !missing_bulletins.is_empty() || !missing_files.is_empty() {
+                let resp = WireEnvelope::SyncResponse {
+                    bulletins: missing_bulletins,
+                    files: missing_files,
+                };
                 if let Ok(json) = serde_json::to_string(&resp) {
                     let _ = socket.send_to(json.as_bytes(), src);
                 }
             }
         }
-        WireEnvelope::SyncResponse { bulletins } => {
+        WireEnvelope::SyncResponse { bulletins, files } => {
             let mut seen = inner.seen_ids.write();
-            let mut stored = inner.bulletins.write();
+            let mut stored_b = inner.bulletins.write();
             for b in bulletins {
                 if seen.insert(b.id.clone()) {
-                    stored.insert(b.id.clone(), b);
+                    stored_b.insert(b.id.clone(), b);
+                }
+            }
+
+            let mut stored_f = inner.files.write();
+            for mut f in files {
+                if !stored_f.contains_key(&f.file_hash) {
+                    let comp_path = inner
+                        .data_dir
+                        .join("files")
+                        .join("completed")
+                        .join(&f.file_hash)
+                        .join(&f.filename);
+                    f.is_complete = comp_path.exists();
+
+                    let meta_dir = inner.data_dir.join("files").join("meta");
+                    let _ = fs::create_dir_all(&meta_dir);
+                    if let Ok(json) = serde_json::to_string_pretty(&f) {
+                        let _ = fs::write(meta_dir.join(format!("{}.json", f.file_hash)), json);
+                    }
+
+                    stored_f.insert(f.file_hash.clone(), f);
+                }
+            }
+        }
+        WireEnvelope::FileAnnounce(mut meta) => {
+            let mut files = inner.files.write();
+            if !files.contains_key(&meta.file_hash) {
+                let comp_path = inner
+                    .data_dir
+                    .join("files")
+                    .join("completed")
+                    .join(&meta.file_hash)
+                    .join(&meta.filename);
+                meta.is_complete = comp_path.exists();
+
+                let meta_dir = inner.data_dir.join("files").join("meta");
+                let _ = fs::create_dir_all(&meta_dir);
+                if let Ok(json) = serde_json::to_string_pretty(&meta) {
+                    let _ = fs::write(meta_dir.join(format!("{}.json", meta.file_hash)), json);
+                }
+
+                files.insert(meta.file_hash.clone(), meta);
+            }
+        }
+        WireEnvelope::FileChunkRequest { file_hash, chunk_index } => {
+            let chunk_path = inner
+                .data_dir
+                .join("files")
+                .join("chunks")
+                .join(&file_hash)
+                .join(chunk_index.to_string());
+
+            if let Ok(chunk_bytes) = fs::read(&chunk_path) {
+                let b64 = BASE64_STANDARD.encode(&chunk_bytes);
+                let resp = WireEnvelope::FileChunkResponse {
+                    file_hash,
+                    chunk_index,
+                    chunk_data_base64: b64,
+                };
+                if let Ok(json) = serde_json::to_string(&resp) {
+                    let _ = socket.send_to(json.as_bytes(), src);
+                }
+            }
+        }
+        WireEnvelope::FileChunkResponse {
+            file_hash,
+            chunk_index,
+            chunk_data_base64,
+        } => {
+            if let Ok(data) = BASE64_STANDARD.decode(&chunk_data_base64) {
+                let chunk_dir = inner.data_dir.join("files").join("chunks").join(&file_hash);
+                let _ = fs::create_dir_all(&chunk_dir);
+                let chunk_path = chunk_dir.join(chunk_index.to_string());
+                let _ = fs::write(chunk_path, &data);
+
+                let meta_opt = inner.files.read().get(&file_hash).cloned();
+                if let Some(mut meta) = meta_opt {
+                    let mut missing_idx = None;
+                    for i in 0..meta.chunk_count {
+                        if !chunk_dir.join(i.to_string()).exists() {
+                            missing_idx = Some(i);
+                            break;
+                        }
+                    }
+
+                    if let Some(next_idx) = missing_idx {
+                        // Request next missing chunk from source peer
+                        let req = WireEnvelope::FileChunkRequest {
+                            file_hash: file_hash.clone(),
+                            chunk_index: next_idx,
+                        };
+                        if let Ok(json) = serde_json::to_string(&req) {
+                            let _ = socket.send_to(json.as_bytes(), src);
+                        }
+                    } else {
+                        // All chunks assembled!
+                        let mut full_bytes = Vec::new();
+                        for i in 0..meta.chunk_count {
+                            if let Ok(c) = fs::read(chunk_dir.join(i.to_string())) {
+                                full_bytes.extend_from_slice(&c);
+                            }
+                        }
+
+                        // Cryptographic verification
+                        let mut hasher = Sha256::new();
+                        hasher.update(&full_bytes);
+                        let computed = hex::encode(hasher.finalize());
+
+                        if computed == file_hash {
+                            let comp_dir = inner.data_dir.join("files").join("completed").join(&file_hash);
+                            let _ = fs::create_dir_all(&comp_dir);
+                            let comp_path = comp_dir.join(&meta.filename);
+                            let _ = fs::write(&comp_path, &full_bytes);
+
+                            meta.is_complete = true;
+                            inner.files.write().insert(file_hash.clone(), meta.clone());
+
+                            let meta_dir = inner.data_dir.join("files").join("meta");
+                            if let Ok(json) = serde_json::to_string_pretty(&meta) {
+                                let _ = fs::write(meta_dir.join(format!("{}.json", file_hash)), json);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -614,4 +967,77 @@ pub extern "C" fn neighbornet_get_bulletins_json() -> *mut c_char {
     let posts = node.get_bulletins();
     let json = serde_json::to_string(&posts).unwrap_or_else(|_| "[]".to_string());
     to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_publish_file(
+    file_path_c: *const c_char,
+    description_c: *const c_char,
+) -> *mut c_char {
+    if file_path_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let file_path_str = unsafe { CStr::from_ptr(file_path_c).to_string_lossy().into_owned() };
+    let desc_str = if description_c.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(description_c).to_string_lossy().into_owned() }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.publish_file(Path::new(&file_path_str), desc_str) {
+        Ok(hash) => to_c_string(hash),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_shared_files_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let files = node.get_shared_files();
+    let json = serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_request_file(file_hash_c: *const c_char) -> bool {
+    if file_hash_c.is_null() {
+        return false;
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.request_file(&hash)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_file_path(file_hash_c: *const c_char) -> *mut c_char {
+    if file_hash_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.get_completed_file_path(&hash) {
+        Some(p) => to_c_string(p.to_string_lossy().into_owned()),
+        None => std::ptr::null_mut(),
+    }
 }

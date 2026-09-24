@@ -21,6 +21,7 @@ void main() {
     expect(find.text('CHANNELS'), findsOneWidget);
     expect(find.text('Chat'), findsOneWidget);
     expect(find.text('Bulletin'), findsOneWidget);
+    expect(find.text('Shared Files'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
     expect(find.text('Emergency Mode'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
@@ -29,6 +30,11 @@ void main() {
     await tester.tap(find.text('Bulletin'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Community Bulletin Board'), findsOneWidget);
+
+    // Switch to Shared Files view
+    await tester.tap(find.text('Shared Files'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Share File'), findsOneWidget);
 
     // Switch to People & Nodes view
     await tester.tap(find.text('People & Nodes'));

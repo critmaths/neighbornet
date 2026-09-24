@@ -53,6 +53,23 @@ void main() {
     expect(history.first.content, 'Hello neighbors! Is power on in sector 4?');
     expect(history.first.channel, 'general');
 
+    // 6. Test File Publishing and Retrieval
+    final sampleFile = File('${tempDir.path}${Platform.pathSeparator}test_manual.txt');
+    sampleFile.writeAsStringSync('Emergency water filtration guidelines for neighborhood distribution.');
+    final fileHash = bridge.publishFile(sampleFile.path, 'Community filtration guidelines');
+    expect(fileHash, isNotNull);
+    expect(fileHash!.length, 64); // SHA-256 = 64 hex characters
+
+    final sharedFiles = bridge.getSharedFiles();
+    expect(sharedFiles.isNotEmpty, isTrue);
+    expect(sharedFiles.first.fileHash, fileHash);
+    expect(sharedFiles.first.fileName, 'test_manual.txt');
+    expect(sharedFiles.first.isComplete, isTrue);
+
+    final completedPath = bridge.getCompletedFilePath(fileHash);
+    expect(completedPath, isNotNull);
+    expect(File(completedPath!).existsSync(), isTrue);
+
     // Clean up
     bridge.stopNode();
     expect(bridge.isReady, isFalse);

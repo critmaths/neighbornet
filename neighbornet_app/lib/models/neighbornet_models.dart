@@ -5,6 +5,7 @@ class NodeStatus {
   final bool isTransport;
   final int peerCount;
   final int bulletinCount;
+  final int fileCount;
   final int uptimeSec;
 
   NodeStatus({
@@ -14,6 +15,7 @@ class NodeStatus {
     required this.isTransport,
     required this.peerCount,
     required this.bulletinCount,
+    this.fileCount = 0,
     required this.uptimeSec,
   });
 
@@ -25,6 +27,7 @@ class NodeStatus {
       isTransport: json['is_transport'] ?? false,
       peerCount: json['peer_count'] ?? 0,
       bulletinCount: json['bulletin_count'] ?? 0,
+      fileCount: json['file_count'] ?? 0,
       uptimeSec: json['uptime_sec'] ?? 0,
     );
   }
@@ -114,5 +117,54 @@ class BulletinPost {
       authorNickname: json['author_nickname'] ?? 'Community',
       timestampSec: json['timestamp_sec'] ?? 0,
     );
+  }
+}
+
+class SharedFileInfo {
+  final String fileHash;
+  final String fileName;
+  final int fileSizeBytes;
+  final int chunkCount;
+  final int chunkSize;
+  final String description;
+  final String authorHash;
+  final String authorNickname;
+  final int timestampSec;
+  final bool isComplete;
+
+  SharedFileInfo({
+    required this.fileHash,
+    required this.fileName,
+    required this.fileSizeBytes,
+    required this.chunkCount,
+    required this.chunkSize,
+    required this.description,
+    required this.authorHash,
+    required this.authorNickname,
+    required this.timestampSec,
+    required this.isComplete,
+  });
+
+  factory SharedFileInfo.fromJson(Map<String, dynamic> json) {
+    return SharedFileInfo(
+      fileHash: json['file_hash'] as String? ?? '',
+      fileName: json['filename'] as String? ?? 'unknown',
+      fileSizeBytes: (json['file_size'] as num?)?.toInt() ?? 0,
+      chunkCount: (json['chunk_count'] as num?)?.toInt() ?? 1,
+      chunkSize: (json['chunk_size'] as num?)?.toInt() ?? 8192,
+      description: json['description'] as String? ?? '',
+      authorHash: json['author_hash'] as String? ?? '',
+      authorNickname: json['author_nickname'] as String? ?? 'Anonymous',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? 0,
+      isComplete: json['is_complete'] as bool? ?? false,
+    );
+  }
+
+  String get formattedSize {
+    if (fileSizeBytes < 1024) return '$fileSizeBytes B';
+    if (fileSizeBytes < 1024 * 1024) {
+      return '${(fileSizeBytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '${(fileSizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }

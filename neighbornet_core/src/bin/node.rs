@@ -30,11 +30,13 @@ fn main() {
 
     let mut last_peer_count = 0;
     let mut last_bulletin_count = 0;
+    let mut last_file_count = 0;
 
     loop {
         thread::sleep(Duration::from_secs(2));
         let peers = node.get_peers();
         let bulletins = node.get_bulletins();
+        let files = node.get_shared_files();
 
         if peers.len() != last_peer_count {
             last_peer_count = peers.len();
@@ -49,6 +51,15 @@ fn main() {
             println!("\n[STORE-AND-FORWARD UPDATE] Total replicated bulletins: {}", bulletins.len());
             if let Some(latest) = bulletins.first() {
                 println!("  Latest Notice [{}]: \"{}\" by {}", latest.urgency.to_uppercase(), latest.title, latest.author_nickname);
+            }
+        }
+
+        if files.len() != last_file_count {
+            last_file_count = files.len();
+            println!("\n[FILE REPLICATION UPDATE] Total replicated files: {}", files.len());
+            if let Some(latest) = files.first() {
+                println!("  Latest File: \"{}\" ({} bytes, complete: {}) by {}", 
+                    latest.filename, latest.file_size, latest.is_complete, latest.author_nickname);
             }
         }
     }
