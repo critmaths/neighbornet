@@ -222,11 +222,52 @@ jobs:
           path: dist/NeighborNet-macOS.zip
 
   # ============================================================================
-  # 5. GITHUB RELEASES PUBLISHER
+  # 5. ANDROID APK BUILD (Direct Sideload Package)
+  # ============================================================================
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Flutter Dependencies
+        run: flutter pub get
+        working-directory: neighbornet_app
+
+      - name: Build Android APK (Release)
+        run: flutter build apk --release
+        working-directory: neighbornet_app
+
+      - name: Package Android Artifact
+        run: |
+          mkdir -p dist
+          cp neighbornet_app/build/app/outputs/flutter-apk/app-release.apk dist/NeighborNet-Android.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeighborNet-Android
+          path: dist/NeighborNet-Android.apk
+
+  # ============================================================================
+  # 6. GITHUB RELEASES PUBLISHER
   # ============================================================================
   publish-release:
     name: Publish Multi-Platform Release
-    needs: [build-windows, build-linux, build-rpi-arm64, build-macos]
+    needs: [build-windows, build-linux, build-rpi-arm64, build-macos, build-android]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -255,6 +296,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: NeighborNet-macOS
+          path: release-artifacts
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NeighborNet-Android
           path: release-artifacts
 
       - name: Create GitHub Release
