@@ -164,11 +164,60 @@ jobs:
           path: dist/NeighborNet-Relay-RaspberryPi-arm64.tar.gz
 
   # ============================================================================
-  # 4. GITHUB RELEASES PUBLISHER
+  # 4. MACOS UNIVERSAL BUILD (Desktop App + Rust Core dylib)
+  # ============================================================================
+  build-macos:
+    name: Build macOS Desktop
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Core Tests & Build
+        run: |
+          cargo test --verbose
+          cargo build --release
+        working-directory: neighbornet_core
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Flutter Dependencies & Tests
+        run: |
+          flutter pub get
+          flutter test
+        working-directory: neighbornet_app
+
+      - name: Build Flutter macOS Desktop (Release)
+        run: flutter build macos --release
+        working-directory: neighbornet_app
+
+      - name: Package macOS Release Archive
+        run: |
+          mkdir -p dist/NeighborNet-macOS
+          cp -r neighbornet_app/build/macos/Build/Products/Release/NeighborNet.app dist/NeighborNet-macOS/ || true
+          cp neighbornet_core/target/release/libneighbornet_core.dylib dist/NeighborNet-macOS/ || true
+          cp COLLAPSE_SURVIVAL_MANUAL.md README.md dist/NeighborNet-macOS/
+          ditto -c -k --sequesterRsrc --keepParent dist/NeighborNet-macOS dist/NeighborNet-macOS.zip
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeighborNet-macOS
+          path: dist/NeighborNet-macOS.zip
+
+  # ============================================================================
+  # 5. GITHUB RELEASES PUBLISHER
   # ============================================================================
   publish-release:
     name: Publish Multi-Platform Release
-    needs: [build-windows, build-linux, build-rpi-arm64]
+    needs: [build-windows, build-linux, build-rpi-arm64, build-macos]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -191,6 +240,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: NeighborNet-Relay-RaspberryPi-arm64
+          path: release-artifacts
+
+      - name: Download macOS Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NeighborNet-macOS
           path: release-artifacts
 
       - name: Create GitHub Release
