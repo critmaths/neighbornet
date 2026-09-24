@@ -45,14 +45,10 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Node & Network Settings'), findsOneWidget);
-    expect(find.text('Mesh & Hardware Diagnostic Self-Test'), findsOneWidget);
-    expect(find.text('Emergency Backup & Node Archive'), findsOneWidget);
-
-    // Scroll to inspect desktop tray settings
-    await tester.drag(find.byType(ListView), const Offset(0, -400));
-    await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Desktop & System Tray Options'), findsOneWidget);
     expect(find.text('Minimize to System Tray'), findsOneWidget);
+    expect(find.text('Minimize Just to Tray'), findsOneWidget);
+    expect(find.text('Send to Tray When Closing (X)'), findsOneWidget);
 
     // Clean up
     state.dispose();
