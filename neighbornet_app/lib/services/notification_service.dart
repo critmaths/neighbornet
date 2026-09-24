@@ -1,7 +1,8 @@
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
-import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:windows_notification/notification_message.dart';
+import 'package:windows_notification/windows_notification.dart';
 import 'tray_and_window_service.dart';
 
 class NotificationService extends ChangeNotifier {
@@ -11,20 +12,21 @@ class NotificationService extends ChangeNotifier {
 
   static const String _prefKeyNotificationsEnabled = 'neighbornet_notifications_enabled';
 
-  bool _isDesktop = false;
+  bool _isWindows = false;
   bool _initialized = false;
   bool _enabled = true;
+  WindowsNotification? _winNotify;
 
-  bool get isDesktop => _isDesktop;
+  bool get isWindows => _isWindows;
   bool get enabled => _enabled;
 
   Future<void> initialize() async {
     if (_initialized) return;
 
     try {
-      _isDesktop = !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+      _isWindows = !kIsWeb && Platform.isWindows;
     } catch (_) {
-      _isDesktop = false;
+      _isWindows = false;
     }
 
     try {
@@ -34,14 +36,18 @@ class NotificationService extends ChangeNotifier {
       debugPrint('[NotificationService] Error loading prefs: $e');
     }
 
-    if (_isDesktop) {
+    if (_isWindows) {
       try {
-        await localNotifier.setup(
-          appName: 'NeighborNet',
-          shortcutPolicy: ShortcutPolicy.requireCreate,
+        _winNotify = WindowsNotification(
+          applicationId: r"NeighborNet.Community.App",
         );
+        await _winNotify?.initNotificationCallBack((details) {
+          if (details.eventType == EventType.onActivate) {
+            TrayAndWindowService.instance.showWindow();
+          }
+        });
       } catch (e) {
-        debugPrint('[NotificationService] Error initializing localNotifier: $e');
+        debugPrint('[NotificationService] WindowsNotification init error: $e');
       }
     }
 
@@ -65,20 +71,16 @@ class NotificationService extends ChangeNotifier {
     required String channel,
     required String content,
   }) async {
-    if (!_enabled || !_isDesktop) return;
+    if (!_enabled || !_isWindows || _winNotify == null) return;
 
     try {
-      final notification = LocalNotification(
-        title: '#$channel • $senderNickname',
-        body: content,
-        silent: false,
+      final messageNotification = NotificationMessage.fromPluginTemplate(
+        "msg_${DateTime.now().millisecondsSinceEpoch}",
+        '#$channel • $senderNickname',
+        content,
       );
 
-      notification.onClick = () {
-        TrayAndWindowService.instance.showWindow();
-      };
-
-      await notification.show();
+      await _winNotify?.showNotificationPluginTemplate(messageNotification);
     } catch (e) {
       debugPrint('[NotificationService] Error displaying message notification: $e');
     }
@@ -89,20 +91,16 @@ class NotificationService extends ChangeNotifier {
     required String author,
     required String urgency,
   }) async {
-    if (!_enabled || !_isDesktop) return;
+    if (!_enabled || !_isWindows || _winNotify == null) return;
 
     try {
-      final notification = LocalNotification(
-        title: '[$urgency BULLETIN] $title',
-        body: 'Posted by $author to the community bulletin board.',
-        silent: false,
+      final bulletinNotification = NotificationMessage.fromPluginTemplate(
+        "bull_${DateTime.now().millisecondsSinceEpoch}",
+        '[$urgency BULLETIN] $title',
+        'Posted by $author to the community bulletin board.',
       );
 
-      notification.onClick = () {
-        TrayAndWindowService.instance.showWindow();
-      };
-
-      await notification.show();
+      await _winNotify?.showNotificationPluginTemplate(bulletinNotification);
     } catch (e) {
       debugPrint('[NotificationService] Error displaying bulletin notification: $e');
     }

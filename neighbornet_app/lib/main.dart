@@ -7,13 +7,11 @@ import 'views/people_view.dart';
 import 'views/emergency_view.dart';
 import 'views/settings_view.dart';
 import 'views/voice_chat_view.dart';
-import 'services/notification_service.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService.instance.initialize();
   await TrayAndWindowService.instance.initialize();
   final state = NeighborNetState();
   await state.initialize();

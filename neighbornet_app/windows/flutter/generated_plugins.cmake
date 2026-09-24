@@ -4,10 +4,10 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   flutter_webrtc
-  local_notifier
   permission_handler_windows
   screen_retriever_windows
   window_manager
+  windows_notification
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
