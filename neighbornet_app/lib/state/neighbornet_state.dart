@@ -42,6 +42,9 @@ class NeighborNetState extends ChangeNotifier {
   List<ChatMessage> get currentMessages => getDisplayMessages(_currentChannel);
   int get nearbyCount => _peers.length;
 
+  List<StewardVoteInfo> getProposals(String roomId) => _roomProposals[roomId] ?? _bridge.getProposals(roomId);
+  List<GovernanceEventInfo> getAuditLog(String roomId) => _roomAuditLogs[roomId] ?? _bridge.getAuditLog(roomId);
+
   int getUnreadCount(String channel) => _unreadCounts[channel] ?? 0;
   int get totalUnreadCount => _unreadCounts.values.fold(0, (a, b) => a + b);
 
