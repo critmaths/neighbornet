@@ -71,6 +71,8 @@ class ChatMessage {
   final String senderNickname;
   final String content;
   final int timestampSec;
+  final String? audioBase64;
+  final int? audioDurationSec;
 
   ChatMessage({
     required this.id,
@@ -79,7 +81,11 @@ class ChatMessage {
     required this.senderNickname,
     required this.content,
     required this.timestampSec,
+    this.audioBase64,
+    this.audioDurationSec,
   });
+
+  bool get isVoiceMemo => audioBase64 != null && audioBase64!.isNotEmpty;
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     return ChatMessage(
@@ -89,7 +95,82 @@ class ChatMessage {
       senderNickname: json['sender_nickname'] ?? 'Neighbor',
       content: json['content'] ?? '',
       timestampSec: json['timestamp_sec'] ?? 0,
+      audioBase64: json['audio_base64'],
+      audioDurationSec: json['audio_duration_sec'],
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'channel': channel,
+      'sender_hash': senderHash,
+      'sender_nickname': senderNickname,
+      'content': content,
+      'timestamp_sec': timestampSec,
+      if (audioBase64 != null) 'audio_base64': audioBase64,
+      if (audioDurationSec != null) 'audio_duration_sec': audioDurationSec,
+    };
+  }
+}
+
+class TacticalMarker {
+  final String id;
+  final String title;
+  final String category; // "medical", "water", "shelter", "hazard", "checkpoint", "relay", "sos"
+  final String description;
+  final double lat;
+  final double lon;
+  final String authorHash;
+  final String authorNickname;
+  final String authorCallsign;
+  final int timestampSec;
+  final bool isActive;
+
+  TacticalMarker({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.description,
+    required this.lat,
+    required this.lon,
+    required this.authorHash,
+    required this.authorNickname,
+    required this.authorCallsign,
+    required this.timestampSec,
+    this.isActive = true,
+  });
+
+  factory TacticalMarker.fromJson(Map<String, dynamic> json) {
+    return TacticalMarker(
+      id: json['id'] ?? '',
+      title: json['title'] ?? '',
+      category: json['category'] ?? 'medical',
+      description: json['description'] ?? '',
+      lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
+      lon: (json['lon'] as num?)?.toDouble() ?? 0.0,
+      authorHash: json['author_hash'] ?? '',
+      authorNickname: json['author_nickname'] ?? '',
+      authorCallsign: json['author_callsign'] ?? '',
+      timestampSec: json['timestamp_sec'] ?? 0,
+      isActive: json['is_active'] ?? true,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'category': category,
+      'description': description,
+      'lat': lat,
+      'lon': lon,
+      'author_hash': authorHash,
+      'author_nickname': authorNickname,
+      'author_callsign': authorCallsign,
+      'timestamp_sec': timestampSec,
+      'is_active': isActive,
+    };
   }
 }
 

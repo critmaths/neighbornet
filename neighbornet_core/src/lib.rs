@@ -57,6 +57,25 @@ pub struct ChatMessage {
     pub sender_nickname: String,
     pub content: String,
     pub timestamp_sec: u64,
+    #[serde(default)]
+    pub audio_base64: Option<String>,
+    #[serde(default)]
+    pub audio_duration_sec: Option<u32>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct TacticalMarker {
+    pub id: String,
+    pub title: String,
+    pub category: String, // "medical", "water", "shelter", "hazard", "checkpoint", "relay", "sos"
+    pub description: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub author_hash: String,
+    pub author_nickname: String,
+    pub author_callsign: String,
+    pub timestamp_sec: u64,
+    pub is_active: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -182,6 +201,8 @@ pub enum WireEnvelope {
         known_entry_ids: Vec<String>,
         #[serde(default)]
         known_profile_hashes: Vec<String>,
+        #[serde(default)]
+        known_marker_ids: Vec<String>,
     },
     SyncResponse {
         bulletins: Vec<BulletinPost>,
@@ -193,6 +214,8 @@ pub enum WireEnvelope {
         entries: Vec<FormEntry>,
         #[serde(default)]
         profiles: Vec<UserProfile>,
+        #[serde(default)]
+        markers: Vec<TacticalMarker>,
     },
     FileAnnounce(SharedFileMeta),
     FileChunkRequest {
@@ -220,6 +243,8 @@ pub enum WireEnvelope {
     },
     PttVoice(PttVoiceChunk),
     PttFloor(PttFloorSignal),
+    MarkerAnnounce(TacticalMarker),
+    MarkerDelete(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -279,6 +304,7 @@ pub struct NodeInner {
     pub form_schemas: RwLock<HashMap<String, FormSchema>>,
     pub form_entries: RwLock<HashMap<String, Vec<FormEntry>>>,
     pub user_profiles: RwLock<HashMap<String, UserProfile>>,
+    pub markers: RwLock<HashMap<String, TacticalMarker>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -675,7 +701,9 @@ impl NeighborNode {
                sender_hash TEXT NOT NULL,
                sender_nickname TEXT NOT NULL,
                content TEXT NOT NULL,
-               timestamp_sec INTEGER NOT NULL
+               timestamp_sec INTEGER NOT NULL,
+               audio_base64 TEXT,
+               audio_duration_sec INTEGER
              );
              CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
              CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp_sec);
@@ -689,6 +717,21 @@ impl NeighborNode {
                priority TEXT NOT NULL,
                timestamp_sec INTEGER NOT NULL
              );
+
+             CREATE TABLE IF NOT EXISTS markers (
+               id TEXT PRIMARY KEY,
+               title TEXT NOT NULL,
+               category TEXT NOT NULL,
+               description TEXT NOT NULL,
+               lat REAL NOT NULL,
+               lon REAL NOT NULL,
+               author_hash TEXT NOT NULL,
+               author_nickname TEXT NOT NULL,
+               author_callsign TEXT NOT NULL,
+               timestamp_sec INTEGER NOT NULL,
+               is_active INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_markers_timestamp ON markers(timestamp_sec);
 
              CREATE TABLE IF NOT EXISTS form_schemas (
                id TEXT PRIMARY KEY,
@@ -726,8 +769,11 @@ impl NeighborNode {
               );"
         ).map_err(|e| format!("Failed to initialize DB schema: {}", e))?;
 
+        let _ = db.execute("ALTER TABLE messages ADD COLUMN audio_base64 TEXT", []);
+        let _ = db.execute("ALTER TABLE messages ADD COLUMN audio_duration_sec INTEGER", []);
+
         let mut loaded_messages = Vec::new();
-        if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec FROM messages ORDER BY timestamp_sec ASC") {
+        if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec FROM messages ORDER BY timestamp_sec ASC") {
             if let Ok(msg_iter) = stmt.query_map([], |row| {
                 Ok(ChatMessage {
                     id: row.get(0)?,
@@ -736,6 +782,8 @@ impl NeighborNode {
                     sender_nickname: row.get(3)?,
                     content: row.get(4)?,
                     timestamp_sec: row.get(5)?,
+                    audio_base64: row.get(6).ok(),
+                    audio_duration_sec: row.get(7).ok(),
                 })
             }) {
                 for msg in msg_iter.flatten() {
@@ -842,6 +890,32 @@ impl NeighborNode {
                 }
             }
         }
+
+        let mut loaded_markers = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, title, category, description, lat, lon, author_hash, author_nickname, author_callsign, timestamp_sec, is_active FROM markers") {
+            if let Ok(marker_iter) = stmt.query_map([], |row| {
+                let is_act: i64 = row.get(10)?;
+                Ok(TacticalMarker {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    category: row.get(2)?,
+                    description: row.get(3)?,
+                    lat: row.get(4)?,
+                    lon: row.get(5)?,
+                    author_hash: row.get(6)?,
+                    author_nickname: row.get(7)?,
+                    author_callsign: row.get(8)?,
+                    timestamp_sec: row.get(9)?,
+                    is_active: is_act != 0,
+                })
+            }) {
+                for m in marker_iter.flatten() {
+                    seen_ids.insert(m.id.clone());
+                    loaded_markers.insert(m.id.clone(), m);
+                }
+            }
+        }
+
         let effective_nick = match loaded_profiles.get(&dest_hash_hex) {
             Some(my_prof) => my_prof.nickname.clone(),
             None => {
@@ -895,6 +969,7 @@ impl NeighborNode {
             form_schemas: RwLock::new(loaded_schemas),
             form_entries: RwLock::new(loaded_entries),
             user_profiles: RwLock::new(loaded_profiles),
+            markers: RwLock::new(loaded_markers),
             seen_ids: RwLock::new(seen_ids),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -1016,8 +1091,21 @@ impl NeighborNode {
     }
 
     pub fn send_chat(&self, channel: String, content: String) -> String {
+        self.send_voice_chat(channel, content, None, None)
+    }
+
+    pub fn send_voice_chat(
+        &self,
+        channel: String,
+        content: String,
+        audio_base64: Option<String>,
+        audio_duration_sec: Option<u32>,
+    ) -> String {
         let timestamp = current_epoch_sec();
-        let raw_id = format!("{}:{}:{}:{}", self.inner.dest_hash_hex, channel, content, timestamp);
+        let raw_id = format!(
+            "{}:{}:{}:{}:{:?}",
+            self.inner.dest_hash_hex, channel, content, timestamp, audio_base64
+        );
         let id = compute_hash(&raw_id);
 
         let chat = ChatMessage {
@@ -1027,6 +1115,8 @@ impl NeighborNode {
             sender_nickname: self.inner.nickname.read().clone(),
             content,
             timestamp_sec: timestamp,
+            audio_base64,
+            audio_duration_sec,
         };
 
         self.inner.seen_ids.write().insert(id.clone());
@@ -1034,15 +1124,17 @@ impl NeighborNode {
 
         if let Ok(db) = self.inner.db.lock() {
             let _ = db.execute(
-                "INSERT OR IGNORE INTO messages (id, channel, sender_hash, sender_nickname, content, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR IGNORE INTO messages (id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
                     chat.id,
                     chat.channel,
                     chat.sender_hash,
                     chat.sender_nickname,
                     chat.content,
-                    chat.timestamp_sec
-                ]
+                    chat.timestamp_sec,
+                    chat.audio_base64,
+                    chat.audio_duration_sec
+                ],
             );
         }
 
@@ -1078,7 +1170,7 @@ impl NeighborNode {
     pub fn get_chat_history(&self, channel: &str) -> Vec<ChatMessage> {
         let mut msgs = Vec::new();
         if let Ok(db) = self.inner.db.lock() {
-            if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec FROM messages WHERE channel = ?1 ORDER BY timestamp_sec ASC") {
+            if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec FROM messages WHERE channel = ?1 ORDER BY timestamp_sec ASC") {
                 if let Ok(msg_iter) = stmt.query_map(rusqlite::params![channel], |row| {
                     Ok(ChatMessage {
                         id: row.get(0)?,
@@ -1087,6 +1179,8 @@ impl NeighborNode {
                         sender_nickname: row.get(3)?,
                         content: row.get(4)?,
                         timestamp_sec: row.get(5)?,
+                        audio_base64: row.get(6).ok(),
+                        audio_duration_sec: row.get(7).ok(),
                     })
                 }) {
                     for msg in msg_iter.flatten() {
@@ -1096,6 +1190,62 @@ impl NeighborNode {
             }
         }
         msgs
+    }
+
+    // --- TACTICAL MESH MAP & COMMUNITY MARKERS ---
+
+    pub fn get_markers(&self) -> Vec<TacticalMarker> {
+        self.inner.markers.read().values().cloned().collect()
+    }
+
+    pub fn upsert_marker(&self, mut marker: TacticalMarker) -> Result<TacticalMarker, String> {
+        if marker.id.is_empty() {
+            let timestamp = current_epoch_sec();
+            let raw_id = format!("{}:{}:{}:{}:{}", self.inner.dest_hash_hex, marker.title, marker.lat, marker.lon, timestamp);
+            marker.id = format!("marker-{}", &compute_hash(&raw_id)[..16]);
+            marker.author_hash = self.inner.dest_hash_hex.clone();
+            marker.author_nickname = self.inner.nickname.read().clone();
+            marker.author_callsign = self.get_my_profile().callsign;
+            marker.timestamp_sec = timestamp;
+        }
+
+        if let Ok(db) = self.inner.db.lock() {
+            let is_act = if marker.is_active { 1 } else { 0 };
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO markers (id, title, category, description, lat, lon, author_hash, author_nickname, author_callsign, timestamp_sec, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                rusqlite::params![
+                    marker.id,
+                    marker.title,
+                    marker.category,
+                    marker.description,
+                    marker.lat,
+                    marker.lon,
+                    marker.author_hash,
+                    marker.author_nickname,
+                    marker.author_callsign,
+                    marker.timestamp_sec,
+                    is_act
+                ],
+            );
+        }
+
+        self.inner.markers.write().insert(marker.id.clone(), marker.clone());
+        self.inner.seen_ids.write().insert(marker.id.clone());
+
+        let envelope = WireEnvelope::MarkerAnnounce(marker.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(marker)
+    }
+
+    pub fn delete_marker(&self, marker_id: &str) -> bool {
+        self.inner.markers.write().remove(marker_id);
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute("DELETE FROM markers WHERE id = ?1", rusqlite::params![marker_id]);
+        }
+        let envelope = WireEnvelope::MarkerDelete(marker_id.to_string());
+        self.broadcast_envelope(&envelope);
+        true
     }
 
     pub fn get_peers(&self) -> Vec<PeerInfo> {
@@ -1664,12 +1814,14 @@ impl NeighborNode {
         self.inner.form_schemas.write().clear();
         self.inner.form_entries.write().clear();
         self.inner.user_profiles.write().clear();
+        self.inner.markers.write().clear();
         self.inner.seen_ids.write().clear();
 
         // 2. Drop and securely reset SQLite tables
         if let Ok(conn) = self.inner.db.lock() {
             let _ = conn.execute("DROP TABLE IF EXISTS messages", []);
             let _ = conn.execute("DROP TABLE IF EXISTS bulletins", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS markers", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_schemas", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_entries", []);
             let _ = conn.execute("DROP TABLE IF EXISTS user_profiles", []);
@@ -1682,7 +1834,9 @@ impl NeighborNode {
                     sender_hash TEXT NOT NULL,
                     sender_nickname TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    timestamp_sec INTEGER NOT NULL
+                    timestamp_sec INTEGER NOT NULL,
+                    audio_base64 TEXT,
+                    audio_duration_sec INTEGER
                 )",
                 [],
             );
@@ -1701,6 +1855,24 @@ impl NeighborNode {
                 )",
                 [],
             );
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS markers (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    lat REAL NOT NULL,
+                    lon REAL NOT NULL,
+                    author_hash TEXT NOT NULL,
+                    author_nickname TEXT NOT NULL,
+                    author_callsign TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL,
+                    is_active INTEGER NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_markers_timestamp ON markers(timestamp_sec)", []);
 
             let _ = conn.execute(
                 "CREATE TABLE IF NOT EXISTS form_schemas (
@@ -2004,6 +2176,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 let known_s_ids: Vec<String> = inner.form_schemas.read().keys().cloned().collect();
                 let known_e_ids: Vec<String> = inner.form_entries.read().values().flat_map(|v| v.iter().map(|e| e.id.clone())).collect();
                 let known_p_hashes: Vec<String> = inner.user_profiles.read().keys().cloned().collect();
+                let known_m_ids: Vec<String> = inner.markers.read().keys().cloned().collect();
                 let sync_req = WireEnvelope::SyncRequest {
                     known_bulletin_ids: known_b_ids,
                     known_file_hashes: known_f_hashes,
@@ -2011,6 +2184,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     known_schema_ids: known_s_ids,
                     known_entry_ids: known_e_ids,
                     known_profile_hashes: known_p_hashes,
+                    known_marker_ids: known_m_ids,
                 };
                 if let Ok(json) = serde_json::to_string(&sync_req) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -2025,14 +2199,16 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 
                 if let Ok(db) = inner.db.lock() {
                     let _ = db.execute(
-                        "INSERT OR IGNORE INTO messages (id, channel, sender_hash, sender_nickname, content, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        "INSERT OR IGNORE INTO messages (id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                         rusqlite::params![
                             msg.id,
                             msg.channel,
                             msg.sender_hash,
                             msg.sender_nickname,
                             msg.content,
-                            msg.timestamp_sec
+                            msg.timestamp_sec,
+                            msg.audio_base64,
+                            msg.audio_duration_sec
                         ]
                     );
                 }
@@ -2067,6 +2243,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             known_schema_ids,
             known_entry_ids,
             known_profile_hashes,
+            known_marker_ids,
         } => {
             let known_b_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
             let missing_bulletins: Vec<BulletinPost> = inner
@@ -2123,12 +2300,22 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 .cloned()
                 .collect();
 
+            let known_m_set: HashSet<String> = known_marker_ids.into_iter().collect();
+            let missing_markers: Vec<TacticalMarker> = inner
+                .markers
+                .read()
+                .values()
+                .filter(|m| !known_m_set.contains(&m.id))
+                .cloned()
+                .collect();
+
             if !missing_bulletins.is_empty()
                 || !missing_files.is_empty()
                 || !missing_rooms.is_empty()
                 || !missing_schemas.is_empty()
                 || !missing_entries.is_empty()
                 || !missing_profiles.is_empty()
+                || !missing_markers.is_empty()
             {
                 let resp = WireEnvelope::SyncResponse {
                     bulletins: missing_bulletins,
@@ -2137,6 +2324,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     schemas: missing_schemas,
                     entries: missing_entries,
                     profiles: missing_profiles,
+                    markers: missing_markers,
                 };
                 if let Ok(json) = serde_json::to_string(&resp) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -2150,6 +2338,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             schemas,
             entries,
             profiles,
+            markers,
         } => {
             let mut seen = inner.seen_ids.write();
             let mut stored_b = inner.bulletins.write();
@@ -2279,6 +2468,32 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         peer.nickname = p.nickname.clone();
                     }
                     stored_p.insert(p.dest_hash.clone(), p);
+                }
+            }
+
+            let mut stored_m = inner.markers.write();
+            for m in markers {
+                if seen.insert(m.id.clone()) {
+                    if let Ok(db) = inner.db.lock() {
+                        let is_act = if m.is_active { 1 } else { 0 };
+                        let _ = db.execute(
+                            "INSERT OR REPLACE INTO markers (id, title, category, description, lat, lon, author_hash, author_nickname, author_callsign, timestamp_sec, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                            rusqlite::params![
+                                m.id,
+                                m.title,
+                                m.category,
+                                m.description,
+                                m.lat,
+                                m.lon,
+                                m.author_hash,
+                                m.author_nickname,
+                                m.author_callsign,
+                                m.timestamp_sec,
+                                is_act
+                            ],
+                        );
+                    }
+                    stored_m.insert(m.id.clone(), m);
                 }
             }
         }
@@ -2509,6 +2724,37 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
         }
         WireEnvelope::PttFloor(_signal) => {
             // PTT floor signals are processed by clients
+        }
+        WireEnvelope::MarkerAnnounce(marker) => {
+            let mut seen = inner.seen_ids.write();
+            if seen.insert(marker.id.clone()) {
+                if let Ok(db) = inner.db.lock() {
+                    let is_act = if marker.is_active { 1 } else { 0 };
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO markers (id, title, category, description, lat, lon, author_hash, author_nickname, author_callsign, timestamp_sec, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        rusqlite::params![
+                            marker.id,
+                            marker.title,
+                            marker.category,
+                            marker.description,
+                            marker.lat,
+                            marker.lon,
+                            marker.author_hash,
+                            marker.author_nickname,
+                            marker.author_callsign,
+                            marker.timestamp_sec,
+                            is_act
+                        ],
+                    );
+                }
+                inner.markers.write().insert(marker.id.clone(), marker);
+            }
+        }
+        WireEnvelope::MarkerDelete(marker_id) => {
+            inner.markers.write().remove(&marker_id);
+            if let Ok(db) = inner.db.lock() {
+                let _ = db.execute("DELETE FROM markers WHERE id = ?1", rusqlite::params![marker_id]);
+            }
         }
     }
 }
@@ -3272,3 +3518,94 @@ pub extern "C" fn neighbornet_send_ptt_floor(
     node.send_ptt_floor(signal);
     true
 }
+
+// --- VOICE MEMO & TACTICAL MAP FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_send_voice_chat(
+    channel_c: *const c_char,
+    content_c: *const c_char,
+    audio_base64_c: *const c_char,
+    audio_duration_sec: u32,
+) -> bool {
+    if channel_c.is_null() || content_c.is_null() {
+        return false;
+    }
+    let channel = unsafe { CStr::from_ptr(channel_c).to_string_lossy().into_owned() };
+    let content = unsafe { CStr::from_ptr(content_c).to_string_lossy().into_owned() };
+    let audio_base64 = if audio_base64_c.is_null() {
+        None
+    } else {
+        Some(unsafe { CStr::from_ptr(audio_base64_c).to_string_lossy().into_owned() })
+    };
+    let duration = if audio_duration_sec > 0 { Some(audio_duration_sec) } else { None };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.send_voice_chat(channel, content, audio_base64, duration);
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_markers_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_markers();
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_upsert_marker(marker_json_c: *const c_char) -> *mut c_char {
+    if marker_json_c.is_null() {
+        return to_c_string("{\"error\":\"Invalid marker JSON pointer\"}".to_string());
+    }
+    let marker_json = unsafe { CStr::from_ptr(marker_json_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    let marker: TacticalMarker = match serde_json::from_str(&marker_json) {
+        Ok(m) => m,
+        Err(e) => return to_c_string(format!("{{\"error\":\"Invalid JSON schema: {e}\"}}")),
+    };
+
+    match node.upsert_marker(marker) {
+        Ok(saved) => {
+            let json = serde_json::to_string(&saved).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_delete_marker(marker_id_c: *const c_char) -> bool {
+    if marker_id_c.is_null() {
+        return false;
+    }
+    let marker_id = unsafe { CStr::from_ptr(marker_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.delete_marker(&marker_id)
+}
+

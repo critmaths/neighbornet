@@ -20,6 +20,7 @@ void main() {
     expect(find.text('Chat'), findsOneWidget);
     expect(find.text('Bulletin'), findsOneWidget);
     expect(find.text('Community Forms'), findsOneWidget);
+    expect(find.text('Tactical Map'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
     expect(find.text('Voice Chat'), findsOneWidget);
     expect(find.text('Walkie-Talkie (PTT)'), findsOneWidget);
@@ -35,6 +36,12 @@ void main() {
     await tester.tap(find.text('Community Forms'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Community Forms & Micro-Apps'), findsOneWidget);
+
+    // Switch to Tactical Map view
+    await tester.tap(find.text('Tactical Map'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Tactical Mesh Map'), findsOneWidget);
+    expect(find.text('Plot Marker'), findsOneWidget);
 
     // Switch to People & Nodes view
     await tester.tap(find.text('People & Nodes'));

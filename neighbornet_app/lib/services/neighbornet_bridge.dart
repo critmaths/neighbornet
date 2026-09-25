@@ -94,6 +94,12 @@ typedef _DartSendPttChunk = bool Function(Pointer<Utf8>, int, Pointer<Utf8>, Poi
 typedef _NativeSendPttFloor = Bool Function(Pointer<Utf8>, Bool, Pointer<Utf8>);
 typedef _DartSendPttFloor = bool Function(Pointer<Utf8>, bool, Pointer<Utf8>);
 
+typedef _NativeSendVoiceChat = Bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Uint32);
+typedef _DartSendVoiceChat = bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int);
+
+typedef _NativeDeleteMarker = Bool Function(Pointer<Utf8>);
+typedef _DartDeleteMarker = bool Function(Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -147,6 +153,11 @@ class NeighborNetBridge {
 
   late _DartSendPttChunk _sendPttChunk;
   late _DartSendPttFloor _sendPttFloor;
+
+  late _DartSendVoiceChat _sendVoiceChat;
+  late _DartGetJson _getMarkersJson;
+  late _DartGetRoomData _upsertMarker;
+  late _DartDeleteMarker _deleteMarker;
 
   bool get isReady => _isInitialized;
 
@@ -220,6 +231,11 @@ class NeighborNetBridge {
 
     _sendPttChunk = _dylib!.lookupFunction<_NativeSendPttChunk, _DartSendPttChunk>('neighbornet_send_ptt_chunk');
     _sendPttFloor = _dylib!.lookupFunction<_NativeSendPttFloor, _DartSendPttFloor>('neighbornet_send_ptt_floor');
+
+    _sendVoiceChat = _dylib!.lookupFunction<_NativeSendVoiceChat, _DartSendVoiceChat>('neighbornet_send_voice_chat');
+    _getMarkersJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_markers_json');
+    _upsertMarker = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_upsert_marker');
+    _deleteMarker = _dylib!.lookupFunction<_NativeDeleteMarker, _DartDeleteMarker>('neighbornet_delete_marker');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -802,6 +818,76 @@ class NeighborNetBridge {
     } finally {
       calloc.free(chanPtr);
       calloc.free(prioPtr);
+    }
+  }
+
+  bool sendVoiceChat({
+    required String channel,
+    required String content,
+    String? audioBase64,
+    int? audioDurationSec,
+  }) {
+    if (!_isInitialized) return false;
+    final chPtr = channel.toNativeUtf8();
+    final cPtr = content.toNativeUtf8();
+    final audioPtr = audioBase64 != null ? audioBase64.toNativeUtf8() : nullptr;
+    try {
+      return _sendVoiceChat(chPtr, cPtr, audioPtr, audioDurationSec ?? 0);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(chPtr);
+      calloc.free(cPtr);
+      if (audioPtr != nullptr) calloc.free(audioPtr);
+    }
+  }
+
+  List<TacticalMarker> getMarkers() {
+    if (!_isInitialized) return [];
+    final ptr = _getMarkersJson();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => TacticalMarker.fromJson(item as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  TacticalMarker? upsertMarker(TacticalMarker marker) {
+    if (!_isInitialized) return null;
+    final jsonStr = jsonEncode(marker.toJson());
+    final jsonPtr = jsonStr.toNativeUtf8();
+    try {
+      final ptr = _upsertMarker(jsonPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final resStr = ptr.toDartString();
+        final map = jsonDecode(resStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return TacticalMarker.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(jsonPtr);
+    }
+  }
+
+  bool deleteMarker(String markerId) {
+    if (!_isInitialized) return false;
+    final idPtr = markerId.toNativeUtf8();
+    try {
+      return _deleteMarker(idPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(idPtr);
     }
   }
 }

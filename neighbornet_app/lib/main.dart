@@ -10,6 +10,7 @@ import 'views/settings_view.dart';
 import 'views/voice_chat_view.dart';
 import 'views/forms_view.dart';
 import 'views/ptt_walkie_talkie_view.dart';
+import 'views/tactical_map_view.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
@@ -182,6 +183,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Community Forms'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.map_outlined),
+                    selectedIcon: Icon(Icons.map),
+                    label: Text('Tactical Map'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.people_outline),
                     selectedIcon: Icon(Icons.people),
                     label: Text('People & Nodes'),
@@ -236,16 +242,18 @@ class _MainShellState extends State<MainShell> {
       case 2:
         return FormsView(state: widget.state);
       case 3:
-        return PeopleView(state: widget.state);
+        return const TacticalMapView();
       case 4:
-        return const VoiceChatView();
+        return PeopleView(state: widget.state);
       case 5:
-        return PttWalkieTalkieView(state: widget.state);
+        return const VoiceChatView();
       case 6:
-        return SurvivalManualView(state: widget.state);
+        return PttWalkieTalkieView(state: widget.state);
       case 7:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 8:
+        return EmergencyView(state: widget.state);
+      case 9:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

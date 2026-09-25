@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/neighbornet_models.dart';
+import '../services/voice_memo_service.dart';
 import '../state/neighbornet_state.dart';
 
 class ChatView extends StatefulWidget {
@@ -933,47 +934,132 @@ class _ChatViewState extends State<ChatView> {
               ),
 
               // Message Input Box
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface,
-                  border: Border(
-                    top: BorderSide(
-                      color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
-                    ),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.attach_file_rounded),
-                      tooltip: 'Attach & Publish File to Mesh',
-                      onPressed: _attachFile,
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: TextField(
-                        controller: _msgController,
-                        decoration: InputDecoration(
-                          hintText: 'Message #${isCustomRoom ? currentRoom?.name : widget.state.currentChannel}...',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            borderSide: BorderSide.none,
+              AnimatedBuilder(
+                animation: VoiceMemoService(),
+                builder: (context, _) {
+                  final memoService = VoiceMemoService();
+                  if (memoService.isRecording) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.15),
+                        border: Border(
+                          top: BorderSide(
+                            color: Colors.redAccent.withValues(alpha: 0.4),
                           ),
-                          filled: true,
-                          fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                         ),
-                        onSubmitted: (_) => _sendMessage(),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.mic, color: Colors.redAccent, size: 24),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Recording Voice Memo: ${memoService.recordingDuration}s',
+                            style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Live waveform bars
+                          Expanded(
+                            child: SizedBox(
+                              height: 24,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  for (final amp in memoService.liveWaveform.take(24))
+                                    Container(
+                                      width: 3,
+                                      height: (amp * 24).clamp(4.0, 24.0),
+                                      margin: const EdgeInsets.symmetric(horizontal: 1),
+                                      decoration: BoxDecoration(
+                                        color: Colors.redAccent,
+                                        borderRadius: BorderRadius.circular(2),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.grey),
+                            tooltip: 'Cancel Recording',
+                            onPressed: () => memoService.cancelRecording(),
+                          ),
+                          IconButton.filled(
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.redAccent,
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: const Icon(Icons.send_rounded),
+                            tooltip: 'Send Voice Memo',
+                            onPressed: () async {
+                              final result = await memoService.stopRecording();
+                              if (result != null) {
+                                widget.state.sendVoiceMemo(
+                                  channel: widget.state.currentChannel,
+                                  base64Audio: result.base64Audio,
+                                  durationSec: result.durationSec,
+                                  content: '🎙️ Voice Memo (${result.durationSec}s)',
+                                );
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      border: Border(
+                        top: BorderSide(
+                          color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    IconButton.filled(
-                      icon: const Icon(Icons.send_rounded),
-                      onPressed: _sendMessage,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.attach_file_rounded),
+                          tooltip: 'Attach & Publish File to Mesh',
+                          onPressed: _attachFile,
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.mic_none_rounded),
+                          tooltip: 'Record Voice Memo',
+                          onPressed: () => memoService.startRecording(),
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: TextField(
+                            controller: _msgController,
+                            decoration: InputDecoration(
+                              hintText: 'Message #${isCustomRoom ? currentRoom?.name : widget.state.currentChannel}...',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: BorderSide.none,
+                              ),
+                              filled: true,
+                              fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                            ),
+                            onSubmitted: (_) => _sendMessage(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton.filled(
+                          icon: const Icon(Icons.send_rounded),
+                          onPressed: _sendMessage,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  );
+                },
               ),
             ],
           ),
@@ -983,6 +1069,10 @@ class _ChatViewState extends State<ChatView> {
   }
 
   Widget _buildMessageContent(BuildContext context, ChatMessage msg, bool isMe) {
+    if (msg.isVoiceMemo) {
+      return _buildVoiceMemoBubble(context, msg, isMe);
+    }
+
     if (msg.content.startsWith('📎 [Shared File]')) {
       final raw = msg.content.substring('📎 [Shared File]'.length).trim();
       final parts = raw.split(' • ');
@@ -1071,6 +1161,88 @@ class _ChatViewState extends State<ChatView> {
             ? Theme.of(context).colorScheme.onPrimaryContainer
             : Theme.of(context).colorScheme.onSurface,
       ),
+    );
+  }
+
+  Widget _buildVoiceMemoBubble(BuildContext context, ChatMessage msg, bool isMe) {
+    return AnimatedBuilder(
+      animation: VoiceMemoService(),
+      builder: (context, _) {
+        final memoService = VoiceMemoService();
+        final isPlaying = memoService.isPlaying(msg.id);
+        final progress = isPlaying ? memoService.playbackProgress : 0.0;
+        final durationSec = msg.audioDurationSec ?? 3;
+
+        return Container(
+          margin: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: isMe
+                ? Colors.white.withValues(alpha: 0.15)
+                : Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isPlaying
+                  ? Colors.tealAccent.withValues(alpha: 0.6)
+                  : Theme.of(context).dividerColor.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton.filledTonal(
+                    icon: Icon(
+                      isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      color: Colors.tealAccent,
+                    ),
+                    onPressed: () {
+                      memoService.playMemo(
+                        msg.id,
+                        msg.audioBase64 ?? '',
+                        durationSec,
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.mic, size: 14, color: Colors.tealAccent),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Voice Memo (${durationSec}s)',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      // Interactive waveform progress bar
+                      SizedBox(
+                        width: 160,
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          backgroundColor: Colors.grey.withValues(alpha: 0.3),
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.tealAccent),
+                          minHeight: 4,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

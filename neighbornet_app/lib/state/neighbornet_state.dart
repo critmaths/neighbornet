@@ -35,6 +35,7 @@ class NeighborNetState extends ChangeNotifier {
   final Map<String, List<FormEntry>> _formEntries = {};
   UserProfile? _myProfile;
   final Map<String, UserProfile> _peerProfiles = {};
+  List<TacticalMarker> _markers = [];
 
   String _currentChannel = 'general';
   String? _errorMessage;
@@ -53,6 +54,7 @@ class NeighborNetState extends ChangeNotifier {
   List<FormSchema> get formSchemas => _formSchemas;
   UserProfile? get myProfile => _myProfile;
   Map<String, UserProfile> get peerProfiles => _peerProfiles;
+  List<TacticalMarker> get markers => _markers;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -266,6 +268,7 @@ class NeighborNetState extends ChangeNotifier {
       _formSchemas.clear();
       _formEntries.clear();
       _peerProfiles.clear();
+      _markers.clear();
       _myProfile = null;
       _currentChannel = 'general';
       _refreshState();
@@ -282,6 +285,7 @@ class NeighborNetState extends ChangeNotifier {
     _bulletins = _bridge.getBulletins();
     _sharedFiles = _bridge.getSharedFiles();
     _rooms = _bridge.getRooms();
+    _markers = _bridge.getMarkers();
     _formSchemas = _bridge.getFormSchemas();
     for (final s in _formSchemas) {
       _formEntries[s.id] = _bridge.getFormEntries(s.id);
@@ -467,6 +471,48 @@ class NeighborNetState extends ChangeNotifier {
       notifyListeners();
     }
     return success;
+  }
+
+  bool sendVoiceMemo({
+    required String channel,
+    required String base64Audio,
+    required int durationSec,
+    String content = 'Voice memo',
+  }) {
+    final success = _bridge.sendVoiceChat(
+      channel: channel,
+      content: content,
+      audioBase64: base64Audio,
+      audioDurationSec: durationSec,
+    );
+    if (success) {
+      _channelMessages[channel] = _bridge.getChatHistory(channel);
+      notifyListeners();
+    }
+    return success;
+  }
+
+  TacticalMarker? upsertMarker(TacticalMarker marker) {
+    final saved = _bridge.upsertMarker(marker);
+    if (saved != null) {
+      _markers = _bridge.getMarkers();
+      notifyListeners();
+    }
+    return saved;
+  }
+
+  bool deleteMarker(String markerId) {
+    final success = _bridge.deleteMarker(markerId);
+    if (success) {
+      _markers = _bridge.getMarkers();
+      notifyListeners();
+    }
+    return success;
+  }
+
+  void refreshMarkers() {
+    _markers = _bridge.getMarkers();
+    notifyListeners();
   }
 
   bool postBulletin({
