@@ -28,6 +28,19 @@ pub const FILE_CHUNK_SIZE: usize = 8192; // 8 KB content-addressed chunks
 // --- DATA STRUCTURES ---
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct UserProfile {
+    pub dest_hash: String,
+    pub nickname: String,
+    pub bio: String,
+    pub avatar_base64: String,
+    pub callsign: String,
+    pub contact_info: String,
+    pub neighborhood_zone: String,
+    pub skills: Vec<String>,
+    pub updated_at_sec: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PeerInfo {
     pub dest_hash: String,
     pub nickname: String,
@@ -167,6 +180,8 @@ pub enum WireEnvelope {
         known_schema_ids: Vec<String>,
         #[serde(default)]
         known_entry_ids: Vec<String>,
+        #[serde(default)]
+        known_profile_hashes: Vec<String>,
     },
     SyncResponse {
         bulletins: Vec<BulletinPost>,
@@ -176,6 +191,8 @@ pub enum WireEnvelope {
         schemas: Vec<FormSchema>,
         #[serde(default)]
         entries: Vec<FormEntry>,
+        #[serde(default)]
+        profiles: Vec<UserProfile>,
     },
     FileAnnounce(SharedFileMeta),
     FileChunkRequest {
@@ -197,6 +214,10 @@ pub enum WireEnvelope {
     GovernanceEventBroadcast(GovernanceEvent),
     FormSchemaAnnounce(FormSchema),
     FormEntryAnnounce(FormEntry),
+    ProfileAnnounce(UserProfile),
+    ProfileRequest {
+        dest_hash: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -230,6 +251,7 @@ pub struct NodeInner {
     pub audit_log: RwLock<HashMap<String, Vec<GovernanceEvent>>>,
     pub form_schemas: RwLock<HashMap<String, FormSchema>>,
     pub form_entries: RwLock<HashMap<String, Vec<FormEntry>>>,
+    pub user_profiles: RwLock<HashMap<String, UserProfile>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -662,7 +684,19 @@ impl NeighborNode {
                signature_hex TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_form_entries_schema ON form_entries(schema_id);
-             CREATE INDEX IF NOT EXISTS idx_form_entries_timestamp ON form_entries(timestamp_sec);"
+             CREATE INDEX IF NOT EXISTS idx_form_entries_timestamp ON form_entries(timestamp_sec);
+
+              CREATE TABLE IF NOT EXISTS user_profiles (
+                dest_hash TEXT PRIMARY KEY,
+                nickname TEXT NOT NULL,
+                bio TEXT NOT NULL,
+                avatar_base64 TEXT NOT NULL,
+                callsign TEXT NOT NULL,
+                contact_info TEXT NOT NULL,
+                neighborhood_zone TEXT NOT NULL,
+                skills_json TEXT NOT NULL,
+                updated_at_sec INTEGER NOT NULL
+              );"
         ).map_err(|e| format!("Failed to initialize DB schema: {}", e))?;
 
         let mut loaded_messages = Vec::new();
@@ -759,11 +793,67 @@ impl NeighborNode {
             }
         }
 
+        let mut loaded_profiles = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec FROM user_profiles") {
+            if let Ok(prof_iter) = stmt.query_map([], |row| {
+                let skills_json: String = row.get(7)?;
+                let skills: Vec<String> = serde_json::from_str(&skills_json).unwrap_or_default();
+                Ok(UserProfile {
+                    dest_hash: row.get(0)?,
+                    nickname: row.get(1)?,
+                    bio: row.get(2)?,
+                    avatar_base64: row.get(3)?,
+                    callsign: row.get(4)?,
+                    contact_info: row.get(5)?,
+                    neighborhood_zone: row.get(6)?,
+                    skills,
+                    updated_at_sec: row.get(8)?,
+                })
+            }) {
+                for p in prof_iter.flatten() {
+                    loaded_profiles.insert(p.dest_hash.clone(), p);
+                }
+            }
+        }
+        let effective_nick = match loaded_profiles.get(&dest_hash_hex) {
+            Some(my_prof) => my_prof.nickname.clone(),
+            None => {
+                let initial_profile = UserProfile {
+                    dest_hash: dest_hash_hex.clone(),
+                    nickname: default_nick.clone(),
+                    bio: String::new(),
+                    avatar_base64: String::new(),
+                    callsign: String::new(),
+                    contact_info: String::new(),
+                    neighborhood_zone: String::new(),
+                    skills: vec![],
+                    updated_at_sec: current_epoch_sec(),
+                };
+                let skills_json = serde_json::to_string(&initial_profile.skills).unwrap_or_default();
+                let _ = db.execute(
+                    "INSERT OR IGNORE INTO user_profiles (dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        initial_profile.dest_hash,
+                        initial_profile.nickname,
+                        initial_profile.bio,
+                        initial_profile.avatar_base64,
+                        initial_profile.callsign,
+                        initial_profile.contact_info,
+                        initial_profile.neighborhood_zone,
+                        skills_json,
+                        initial_profile.updated_at_sec
+                    ],
+                );
+                loaded_profiles.insert(dest_hash_hex.clone(), initial_profile);
+                default_nick
+            }
+        };
+
         let lora_mgr = Arc::new(lora::LoraManager::new());
 
         let inner = Arc::new(NodeInner {
             dest_hash_hex,
-            nickname: RwLock::new(default_nick),
+            nickname: RwLock::new(effective_nick),
             listen_port: bound_port,
             is_transport,
             data_dir: data_dir.clone(),
@@ -777,6 +867,7 @@ impl NeighborNode {
             audit_log: RwLock::new(HashMap::new()),
             form_schemas: RwLock::new(loaded_schemas),
             form_entries: RwLock::new(loaded_entries),
+            user_profiles: RwLock::new(loaded_profiles),
             seen_ids: RwLock::new(seen_ids),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -819,7 +910,44 @@ impl NeighborNode {
     }
 
     pub fn set_nickname(&self, name: String) {
-        *self.inner.nickname.write() = name;
+        *self.inner.nickname.write() = name.clone();
+        let mut profiles = self.inner.user_profiles.write();
+        let mut prof = match profiles.get(&self.inner.dest_hash_hex) {
+            Some(p) => p.clone(),
+            None => UserProfile {
+                dest_hash: self.inner.dest_hash_hex.clone(),
+                nickname: name.clone(),
+                bio: String::new(),
+                avatar_base64: String::new(),
+                callsign: String::new(),
+                contact_info: String::new(),
+                neighborhood_zone: String::new(),
+                skills: vec![],
+                updated_at_sec: current_epoch_sec(),
+            },
+        };
+        prof.nickname = name;
+        prof.updated_at_sec = current_epoch_sec();
+        if let Ok(db) = self.inner.db.lock() {
+            let skills_json = serde_json::to_string(&prof.skills).unwrap_or_default();
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO user_profiles (dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    prof.dest_hash,
+                    prof.nickname,
+                    prof.bio,
+                    prof.avatar_base64,
+                    prof.callsign,
+                    prof.contact_info,
+                    prof.neighborhood_zone,
+                    skills_json,
+                    prof.updated_at_sec
+                ],
+            );
+        }
+        profiles.insert(self.inner.dest_hash_hex.clone(), prof.clone());
+        let envelope = WireEnvelope::ProfileAnnounce(prof);
+        self.broadcast_envelope(&envelope);
     }
 
     pub fn post_bulletin(&self, title: String, body: String, urgency: String) -> String {
@@ -978,6 +1106,69 @@ impl NeighborNode {
         }
     }
 
+
+
+    // --- SOVEREIGN PROFILES & TACTICAL IDENTITY ---
+
+    pub fn get_my_profile(&self) -> UserProfile {
+        let profiles = self.inner.user_profiles.read();
+        if let Some(prof) = profiles.get(&self.inner.dest_hash_hex) {
+            return prof.clone();
+        }
+        UserProfile {
+            dest_hash: self.inner.dest_hash_hex.clone(),
+            nickname: self.inner.nickname.read().clone(),
+            bio: String::new(),
+            avatar_base64: String::new(),
+            callsign: String::new(),
+            contact_info: String::new(),
+            neighborhood_zone: String::new(),
+            skills: vec![],
+            updated_at_sec: current_epoch_sec(),
+        }
+    }
+
+    pub fn update_my_profile(&self, mut profile: UserProfile) -> Result<UserProfile, String> {
+        profile.dest_hash = self.inner.dest_hash_hex.clone();
+        profile.updated_at_sec = current_epoch_sec();
+
+        if !profile.nickname.is_empty() {
+            *self.inner.nickname.write() = profile.nickname.clone();
+        }
+
+        if let Ok(db) = self.inner.db.lock() {
+            let skills_json = serde_json::to_string(&profile.skills).unwrap_or_default();
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO user_profiles (dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    profile.dest_hash,
+                    profile.nickname,
+                    profile.bio,
+                    profile.avatar_base64,
+                    profile.callsign,
+                    profile.contact_info,
+                    profile.neighborhood_zone,
+                    skills_json,
+                    profile.updated_at_sec
+                ],
+            );
+        }
+
+        self.inner.user_profiles.write().insert(profile.dest_hash.clone(), profile.clone());
+
+        let envelope = WireEnvelope::ProfileAnnounce(profile.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(profile)
+    }
+
+    pub fn get_peer_profile(&self, dest_hash: &str) -> Option<UserProfile> {
+        self.inner.user_profiles.read().get(dest_hash).cloned()
+    }
+
+    pub fn get_all_profiles(&self) -> Vec<UserProfile> {
+        self.inner.user_profiles.read().values().cloned().collect()
+    }
 
     // --- DECENTRALIZED FILE SHARING SUBSYSTEM ---
 
@@ -1439,6 +1630,7 @@ impl NeighborNode {
         self.inner.audit_log.write().clear();
         self.inner.form_schemas.write().clear();
         self.inner.form_entries.write().clear();
+        self.inner.user_profiles.write().clear();
         self.inner.seen_ids.write().clear();
 
         // 2. Drop and securely reset SQLite tables
@@ -1447,6 +1639,7 @@ impl NeighborNode {
             let _ = conn.execute("DROP TABLE IF EXISTS bulletins", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_schemas", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_entries", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS user_profiles", []);
             let _ = conn.execute("VACUUM", []);
 
             let _ = conn.execute(
@@ -1504,7 +1697,52 @@ impl NeighborNode {
             );
             let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_form_entries_schema ON form_entries(schema_id)", []);
             let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_form_entries_timestamp ON form_entries(timestamp_sec)", []);
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS user_profiles (
+                    dest_hash TEXT PRIMARY KEY,
+                    nickname TEXT NOT NULL,
+                    bio TEXT NOT NULL,
+                    avatar_base64 TEXT NOT NULL,
+                    callsign TEXT NOT NULL,
+                    contact_info TEXT NOT NULL,
+                    neighborhood_zone TEXT NOT NULL,
+                    skills_json TEXT NOT NULL,
+                    updated_at_sec INTEGER NOT NULL
+                )",
+                [],
+            );
         }
+
+        let initial_prof = UserProfile {
+            dest_hash: self.inner.dest_hash_hex.clone(),
+            nickname: self.inner.nickname.read().clone(),
+            bio: String::new(),
+            avatar_base64: String::new(),
+            callsign: String::new(),
+            contact_info: String::new(),
+            neighborhood_zone: String::new(),
+            skills: vec![],
+            updated_at_sec: current_epoch_sec(),
+        };
+        if let Ok(conn) = self.inner.db.lock() {
+            let skills_json = serde_json::to_string(&initial_prof.skills).unwrap_or_default();
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO user_profiles (dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    initial_prof.dest_hash,
+                    initial_prof.nickname,
+                    initial_prof.bio,
+                    initial_prof.avatar_base64,
+                    initial_prof.callsign,
+                    initial_prof.contact_info,
+                    initial_prof.neighborhood_zone,
+                    skills_json,
+                    initial_prof.updated_at_sec
+                ],
+            );
+        }
+        self.inner.user_profiles.write().insert(self.inner.dest_hash_hex.clone(), initial_prof);
 
         // Re-seed default form schemas
         for s in default_form_schemas(&self.inner.dest_hash_hex, &self.inner.nickname.read()) {
@@ -1732,12 +1970,14 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 let known_r_ids: Vec<String> = inner.rooms.read().keys().cloned().collect();
                 let known_s_ids: Vec<String> = inner.form_schemas.read().keys().cloned().collect();
                 let known_e_ids: Vec<String> = inner.form_entries.read().values().flat_map(|v| v.iter().map(|e| e.id.clone())).collect();
+                let known_p_hashes: Vec<String> = inner.user_profiles.read().keys().cloned().collect();
                 let sync_req = WireEnvelope::SyncRequest {
                     known_bulletin_ids: known_b_ids,
                     known_file_hashes: known_f_hashes,
                     known_room_ids: known_r_ids,
                     known_schema_ids: known_s_ids,
                     known_entry_ids: known_e_ids,
+                    known_profile_hashes: known_p_hashes,
                 };
                 if let Ok(json) = serde_json::to_string(&sync_req) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -1793,6 +2033,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             known_room_ids,
             known_schema_ids,
             known_entry_ids,
+            known_profile_hashes,
         } => {
             let known_b_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
             let missing_bulletins: Vec<BulletinPost> = inner
@@ -1840,11 +2081,21 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 .cloned()
                 .collect();
 
+            let known_p_set: HashSet<String> = known_profile_hashes.into_iter().collect();
+            let missing_profiles: Vec<UserProfile> = inner
+                .user_profiles
+                .read()
+                .values()
+                .filter(|p| !known_p_set.contains(&p.dest_hash))
+                .cloned()
+                .collect();
+
             if !missing_bulletins.is_empty()
                 || !missing_files.is_empty()
                 || !missing_rooms.is_empty()
                 || !missing_schemas.is_empty()
                 || !missing_entries.is_empty()
+                || !missing_profiles.is_empty()
             {
                 let resp = WireEnvelope::SyncResponse {
                     bulletins: missing_bulletins,
@@ -1852,6 +2103,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     rooms: missing_rooms,
                     schemas: missing_schemas,
                     entries: missing_entries,
+                    profiles: missing_profiles,
                 };
                 if let Ok(json) = serde_json::to_string(&resp) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -1864,6 +2116,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             rooms,
             schemas,
             entries,
+            profiles,
         } => {
             let mut seen = inner.seen_ids.write();
             let mut stored_b = inner.bulletins.write();
@@ -1962,6 +2215,76 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         );
                     }
                     stored_e.entry(e.schema_id.clone()).or_default().push(e);
+                }
+            }
+
+            let mut stored_p = inner.user_profiles.write();
+            for p in profiles {
+                let is_newer = match stored_p.get(&p.dest_hash) {
+                    Some(existing) => p.updated_at_sec >= existing.updated_at_sec,
+                    None => true,
+                };
+                if is_newer {
+                    if let Ok(db) = inner.db.lock() {
+                        let skills_json = serde_json::to_string(&p.skills).unwrap_or_default();
+                        let _ = db.execute(
+                            "INSERT OR REPLACE INTO user_profiles (dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                            rusqlite::params![
+                                p.dest_hash,
+                                p.nickname,
+                                p.bio,
+                                p.avatar_base64,
+                                p.callsign,
+                                p.contact_info,
+                                p.neighborhood_zone,
+                                skills_json,
+                                p.updated_at_sec
+                            ],
+                        );
+                    }
+                    if let Some(peer) = inner.peers.write().get_mut(&p.dest_hash) {
+                        peer.nickname = p.nickname.clone();
+                    }
+                    stored_p.insert(p.dest_hash.clone(), p);
+                }
+            }
+        }
+        WireEnvelope::ProfileAnnounce(profile) => {
+            let mut stored_p = inner.user_profiles.write();
+            let is_newer = match stored_p.get(&profile.dest_hash) {
+                Some(existing) => profile.updated_at_sec >= existing.updated_at_sec,
+                None => true,
+            };
+            if is_newer {
+                if let Ok(db) = inner.db.lock() {
+                    let skills_json = serde_json::to_string(&profile.skills).unwrap_or_default();
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO user_profiles (dest_hash, nickname, bio, avatar_base64, callsign, contact_info, neighborhood_zone, skills_json, updated_at_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        rusqlite::params![
+                            profile.dest_hash,
+                            profile.nickname,
+                            profile.bio,
+                            profile.avatar_base64,
+                            profile.callsign,
+                            profile.contact_info,
+                            profile.neighborhood_zone,
+                            skills_json,
+                            profile.updated_at_sec
+                        ],
+                    );
+                }
+                if let Some(peer) = inner.peers.write().get_mut(&profile.dest_hash) {
+                    peer.nickname = profile.nickname.clone();
+                }
+                stored_p.insert(profile.dest_hash.clone(), profile);
+            }
+        }
+        WireEnvelope::ProfileRequest { dest_hash } => {
+            let stored_p = inner.user_profiles.read();
+            if let Some(prof) = stored_p.get(&dest_hash) {
+                let resp = WireEnvelope::ProfileAnnounce(prof.clone());
+                if let Ok(json) = serde_json::to_string(&resp) {
+                    let _ = socket.send_to(json.as_bytes(), src);
                 }
             }
         }
@@ -2745,3 +3068,84 @@ pub extern "C" fn neighbornet_submit_form_entry(
     }
 }
 
+
+
+// --- SOVEREIGN PROFILES & TACTICAL ID FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_my_profile_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{}".to_string()),
+    };
+
+    let prof = node.get_my_profile();
+    let json = serde_json::to_string(&prof).unwrap_or_else(|_| "{}".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_update_my_profile(profile_json_c: *const c_char) -> *mut c_char {
+    if profile_json_c.is_null() {
+        return to_c_string("{\"error\":\"Invalid profile JSON pointer\"}".to_string());
+    }
+    let profile_json = unsafe { CStr::from_ptr(profile_json_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    let profile: UserProfile = match serde_json::from_str(&profile_json) {
+        Ok(p) => p,
+        Err(e) => return to_c_string(format!("{{\"error\":\"Invalid JSON schema: {e}\"}}")),
+    };
+
+    match node.update_my_profile(profile) {
+        Ok(saved) => {
+            let json = serde_json::to_string(&saved).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_peer_profile_json(dest_hash_c: *const c_char) -> *mut c_char {
+    if dest_hash_c.is_null() {
+        return to_c_string("null".to_string());
+    }
+    let dest_hash = unsafe { CStr::from_ptr(dest_hash_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("null".to_string()),
+    };
+
+    match node.get_peer_profile(&dest_hash) {
+        Some(p) => {
+            let json = serde_json::to_string(&p).unwrap_or_else(|_| "null".to_string());
+            to_c_string(json)
+        }
+        None => to_c_string("null".to_string()),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_all_profiles_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_all_profiles();
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}

@@ -134,6 +134,11 @@ class NeighborNetBridge {
   late _DartGetRoomData _getFormEntriesJson;
   late _DartSubmitFormEntry _submitFormEntry;
 
+  late _DartGetJson _getMyProfileJson;
+  late _DartGetRoomData _updateMyProfile;
+  late _DartGetRoomData _getPeerProfileJson;
+  late _DartGetJson _getAllProfilesJson;
+
   bool get isReady => _isInitialized;
 
   void _loadLibrary() {
@@ -198,6 +203,11 @@ class NeighborNetBridge {
     _createFormSchema = _dylib!.lookupFunction<_NativeCreateFormSchema, _DartCreateFormSchema>('neighbornet_create_form_schema');
     _getFormEntriesJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_form_entries_json');
     _submitFormEntry = _dylib!.lookupFunction<_NativeSubmitFormEntry, _DartSubmitFormEntry>('neighbornet_submit_form_entry');
+
+    _getMyProfileJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_my_profile_json');
+    _updateMyProfile = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_update_my_profile');
+    _getPeerProfileJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_peer_profile_json');
+    _getAllProfilesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_all_profiles_json');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -664,6 +674,79 @@ class NeighborNetBridge {
     } finally {
       calloc.free(schemaIdPtr);
       calloc.free(dataPtr);
+    }
+  }
+
+  UserProfile? getMyProfile() {
+    if (!_isInitialized) return null;
+    final ptr = _getMyProfileJson();
+    if (ptr == nullptr) return null;
+    try {
+      final jsonStr = ptr.toDartString();
+      if (jsonStr.isEmpty || jsonStr == '{}') return null;
+      return UserProfile.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  UserProfile? updateMyProfile(UserProfile profile) {
+    if (!_isInitialized) return null;
+    final jsonStr = jsonEncode(profile.toJson());
+    final jsonPtr = jsonStr.toNativeUtf8();
+    try {
+      final ptr = _updateMyProfile(jsonPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final resStr = ptr.toDartString();
+        final map = jsonDecode(resStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return UserProfile.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(jsonPtr);
+    }
+  }
+
+  UserProfile? getPeerProfile(String destHash) {
+    if (!_isInitialized) return null;
+    final hashPtr = destHash.toNativeUtf8();
+    try {
+      final ptr = _getPeerProfileJson(hashPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        if (jsonStr.isEmpty || jsonStr == 'null' || jsonStr == '{}') return null;
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return UserProfile.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(hashPtr);
+    }
+  }
+
+  List<UserProfile> getAllProfiles() {
+    if (!_isInitialized) return [];
+    final ptr = _getAllProfilesJson();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => UserProfile.fromJson(item as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    } finally {
+      _freeString(ptr);
     }
   }
 }

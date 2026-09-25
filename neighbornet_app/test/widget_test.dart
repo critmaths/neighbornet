@@ -49,10 +49,14 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Node & Network Settings'), findsOneWidget);
+    expect(find.text('Sovereign Profile & Tactical Identity'), findsOneWidget);
+
+    // Scroll down to view LoRa & desktop settings
+    await tester.drag(find.byType(ListView).first, const Offset(0, -600));
+    await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('LoRa Tactical Radio (KISS / RNode)'), findsOneWidget);
 
-    // Scroll down to view desktop settings
-    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.drag(find.byType(ListView).first, const Offset(0, -800));
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Desktop & System Tray Options'), findsOneWidget);

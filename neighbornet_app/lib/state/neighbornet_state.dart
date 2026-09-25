@@ -31,6 +31,8 @@ class NeighborNetState extends ChangeNotifier {
   final Map<String, List<GovernanceEventInfo>> _roomAuditLogs = {};
   List<FormSchema> _formSchemas = [];
   final Map<String, List<FormEntry>> _formEntries = {};
+  UserProfile? _myProfile;
+  final Map<String, UserProfile> _peerProfiles = {};
 
   String _currentChannel = 'general';
   String? _errorMessage;
@@ -47,6 +49,8 @@ class NeighborNetState extends ChangeNotifier {
   List<SharedFileInfo> get sharedFiles => _sharedFiles;
   List<RoomInfo> get rooms => _rooms;
   List<FormSchema> get formSchemas => _formSchemas;
+  UserProfile? get myProfile => _myProfile;
+  Map<String, UserProfile> get peerProfiles => _peerProfiles;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -258,6 +262,8 @@ class NeighborNetState extends ChangeNotifier {
       _roomAuditLogs.clear();
       _formSchemas.clear();
       _formEntries.clear();
+      _peerProfiles.clear();
+      _myProfile = null;
       _currentChannel = 'general';
       _refreshState();
       notifyListeners();
@@ -276,6 +282,16 @@ class NeighborNetState extends ChangeNotifier {
     _formSchemas = _bridge.getFormSchemas();
     for (final s in _formSchemas) {
       _formEntries[s.id] = _bridge.getFormEntries(s.id);
+    }
+    final myP = _bridge.getMyProfile();
+    if (myP != null) {
+      _myProfile = myP;
+    }
+    final allP = _bridge.getAllProfiles();
+    for (final p in allP) {
+      if (p.destHash != _status?.destHash) {
+        _peerProfiles[p.destHash] = p;
+      }
     }
     final lora = _bridge.getLoraStatus();
     if (lora != null) {
@@ -629,6 +645,44 @@ class NeighborNetState extends ChangeNotifier {
       await refreshFormEntries(schemaId);
     }
     return entry;
+  }
+
+  UserProfile? getProfileForPeer(String destHash) {
+    if (_myProfile != null && _myProfile!.destHash == destHash) {
+      return _myProfile;
+    }
+    return _peerProfiles[destHash] ?? _bridge.getPeerProfile(destHash);
+  }
+
+  Future<void> refreshMyProfile() async {
+    final prof = _bridge.getMyProfile();
+    if (prof != null) {
+      _myProfile = prof;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshPeerProfiles() async {
+    final list = _bridge.getAllProfiles();
+    for (final p in list) {
+      if (p.destHash == _status?.destHash) {
+        _myProfile = p;
+      } else {
+        _peerProfiles[p.destHash] = p;
+      }
+    }
+    notifyListeners();
+  }
+
+  bool updateMyProfile(UserProfile profile) {
+    final updated = _bridge.updateMyProfile(profile);
+    if (updated != null) {
+      _myProfile = updated;
+      _status = _bridge.getStatus();
+      notifyListeners();
+      return true;
+    }
+    return false;
   }
 
   @override

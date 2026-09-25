@@ -15,6 +15,14 @@ class SettingsView extends StatefulWidget {
 
 class _SettingsViewState extends State<SettingsView> {
   late TextEditingController _nickCtrl;
+  late TextEditingController _callsignCtrl;
+  late TextEditingController _zoneCtrl;
+  late TextEditingController _contactCtrl;
+  late TextEditingController _bioCtrl;
+  late TextEditingController _customSkillCtrl;
+  List<String> _selectedSkills = [];
+  String _selectedAvatar = 'default';
+
   String? _selectedPort;
   int _selectedFreqHz = 915000000;
   int _selectedSf = 10;
@@ -23,20 +31,87 @@ class _SettingsViewState extends State<SettingsView> {
   @override
   void initState() {
     super.initState();
-    _nickCtrl = TextEditingController(text: widget.state.status?.nickname ?? '');
+    final prof = widget.state.myProfile;
+    _nickCtrl = TextEditingController(text: prof?.nickname ?? widget.state.status?.nickname ?? '');
+    _callsignCtrl = TextEditingController(text: prof?.callsign ?? '');
+    _zoneCtrl = TextEditingController(text: prof?.neighborhoodZone ?? '');
+    _contactCtrl = TextEditingController(text: prof?.contactInfo ?? '');
+    _bioCtrl = TextEditingController(text: prof?.bio ?? '');
+    _customSkillCtrl = TextEditingController();
+    _selectedSkills = List.from(prof?.skills ?? []);
+    _selectedAvatar = (prof?.avatarBase64.isNotEmpty == true) ? prof!.avatarBase64 : 'default';
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         widget.state.refreshSerialPorts();
+        widget.state.refreshMyProfile();
       }
     });
   }
 
   @override
+  void dispose() {
+    _nickCtrl.dispose();
+    _callsignCtrl.dispose();
+    _zoneCtrl.dispose();
+    _contactCtrl.dispose();
+    _bioCtrl.dispose();
+    _customSkillCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant SettingsView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_nickCtrl.text.isEmpty && widget.state.status?.nickname != null) {
-      _nickCtrl.text = widget.state.status!.nickname;
+    final prof = widget.state.myProfile;
+    if (_nickCtrl.text.isEmpty && prof != null) {
+      _nickCtrl.text = prof.nickname;
+      _callsignCtrl.text = prof.callsign;
+      _zoneCtrl.text = prof.neighborhoodZone;
+      _contactCtrl.text = prof.contactInfo;
+      _bioCtrl.text = prof.bio;
+      _selectedSkills = List.from(prof.skills);
+      _selectedAvatar = prof.avatarBase64.isNotEmpty ? prof.avatarBase64 : 'default';
     }
+  }
+
+
+  Widget _buildAvatarOption(String key, IconData icon, Color color, String label) {
+    final isSelected = _selectedAvatar == key;
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _selectedAvatar = key;
+        });
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withValues(alpha: 0.25) : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? color : Theme.of(context).dividerColor.withValues(alpha: 0.2),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: isSelected ? color : Theme.of(context).colorScheme.onSurfaceVariant, size: 18),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? color : Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -61,7 +136,7 @@ class _SettingsViewState extends State<SettingsView> {
 
           const SizedBox(height: 24),
 
-          // Profile Card
+          // Sovereign Profile & Tactical Identity Card
           Card(
             elevation: 0,
             shape: RoundedRectangleBorder(
@@ -73,39 +148,232 @@ class _SettingsViewState extends State<SettingsView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Community Identity', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.badge_outlined, color: Colors.amber, size: 22),
+                          SizedBox(width: 10),
+                          Text(
+                            'Sovereign Profile & Tactical Identity',
+                            style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline_rounded, color: Colors.green, size: 14),
+                            SizedBox(width: 4),
+                            Text(
+                              'Cryptographically Signed',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.green),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Your local-first profile broadcasted across the mesh DAG to peers. All fields are optional and stored on your hardware.',
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Avatar preset selector
+                  const Text('Tactical Avatar Badge:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _buildAvatarOption('default', Icons.person_outline_rounded, Colors.blueGrey, 'Standard'),
+                      _buildAvatarOption('tactical_medic', Icons.medical_services_outlined, Colors.redAccent, 'Medic / CERT'),
+                      _buildAvatarOption('tactical_radio', Icons.radio_outlined, Colors.cyan, 'Radio Comms'),
+                      _buildAvatarOption('tactical_solar', Icons.bolt_outlined, Colors.amber, 'Solar / Power'),
+                      _buildAvatarOption('tactical_shield', Icons.shield_outlined, Colors.purpleAccent, 'Security'),
+                      _buildAvatarOption('tactical_water', Icons.water_drop_outlined, Colors.lightBlueAccent, 'Water / Supply'),
+                      _buildAvatarOption('tactical_recon', Icons.explore_outlined, Colors.orangeAccent, 'Recon / Scout'),
+                      _buildAvatarOption('tactical_engineer', Icons.handyman_outlined, Colors.teal, 'Engineer'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Form Fields
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: _nickCtrl,
                           decoration: const InputDecoration(
-                            labelText: 'Community Display Nickname',
-                            hintText: 'e.g. Alice',
+                            labelText: 'Display Nickname',
+                            hintText: 'e.g. Alice Alpha',
+                            prefixIcon: Icon(Icons.person_rounded, size: 18),
                             border: OutlineInputBorder(),
                             isDense: true,
                           ),
                         ),
                       ),
                       const SizedBox(width: 12),
-                      FilledButton(
-                        onPressed: () {
-                          if (_nickCtrl.text.trim().isNotEmpty) {
-                            final ok = widget.state.setNickname(_nickCtrl.text.trim());
-                            if (ok) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Nickname updated successfully!')),
-                              );
-                            }
-                          }
-                        },
-                        child: const Text('Update'),
+                      Expanded(
+                        child: TextField(
+                          controller: _callsignCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Radio / Tactical Callsign',
+                            hintText: 'e.g. KD9XYZ / Unit-4',
+                            prefixIcon: Icon(Icons.cell_tower_rounded, size: 18),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
                       ),
                     ],
                   ),
+
+                  const SizedBox(height: 14),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _zoneCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Neighborhood Sector / Grid Square',
+                            hintText: 'e.g. Oak Ridge / Grid B-4',
+                            prefixIcon: Icon(Icons.location_on_outlined, size: 18),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _contactCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Alternate Contact / Comms Channel',
+                            hintText: 'e.g. Signal: @alice / 146.520 MHz',
+                            prefixIcon: Icon(Icons.contact_mail_outlined, size: 18),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  TextField(
+                    controller: _bioCtrl,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Bio / Mission & Capabilities',
+                      hintText: 'Brief summary of your field role, capabilities, equipment, or mutual aid offerings...',
+                      prefixIcon: Icon(Icons.description_outlined, size: 18),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+
                   const SizedBox(height: 20),
-                  const Text('Reticulum Destination Hash:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+
+                  // Skills & Capabilities Matrix
+                  Row(
+                    children: [
+                      const Text(
+                        'Skills & Mutual Aid Capabilities:',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${_selectedSkills.length} selected',
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.primary),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: kStandardTacticalSkills.map((skill) {
+                      final isSelected = _selectedSkills.contains(skill);
+                      return FilterChip(
+                        label: Text(skill, style: TextStyle(fontSize: 12, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          setState(() {
+                            if (selected) {
+                              _selectedSkills.add(skill);
+                            } else {
+                              _selectedSkills.remove(skill);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Custom Skill Adder
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _customSkillCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Add Custom Skill or Equipment Tag',
+                            hintText: 'e.g. Chainsaw / Drone Pilot / Generator',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onSubmitted: (val) {
+                            final trimmed = val.trim();
+                            if (trimmed.isNotEmpty && !_selectedSkills.contains(trimmed)) {
+                              setState(() {
+                                _selectedSkills.add(trimmed);
+                                _customSkillCtrl.clear();
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        icon: const Icon(Icons.add_rounded),
+                        tooltip: 'Add Custom Skill',
+                        onPressed: () {
+                          final trimmed = _customSkillCtrl.text.trim();
+                          if (trimmed.isNotEmpty && !_selectedSkills.contains(trimmed)) {
+                            setState(() {
+                              _selectedSkills.add(trimmed);
+                              _customSkillCtrl.clear();
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Destination Hash container
+                  const Text('Reticulum Sovereign Address Hash:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -128,12 +396,46 @@ class _SettingsViewState extends State<SettingsView> {
                             if (status?.destHash != null) {
                               Clipboard.setData(ClipboardData(text: status!.destHash));
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Copied hash to clipboard!')),
+                                const SnackBar(content: Text('Copied sovereign address to clipboard!')),
                               );
                             }
                           },
                         ),
                       ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Save & Broadcast Button
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.cell_tower_rounded, size: 18),
+                      label: const Text('Save & Broadcast Profile to Mesh'),
+                      onPressed: () {
+                        final nick = _nickCtrl.text.trim().isEmpty ? (status?.nickname ?? 'Neighbor') : _nickCtrl.text.trim();
+                        final newProf = UserProfile(
+                          destHash: status?.destHash ?? '',
+                          nickname: nick,
+                          callsign: _callsignCtrl.text.trim(),
+                          neighborhoodZone: _zoneCtrl.text.trim(),
+                          contactInfo: _contactCtrl.text.trim(),
+                          bio: _bioCtrl.text.trim(),
+                          skills: _selectedSkills,
+                          avatarBase64: _selectedAvatar,
+                          updatedAtSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                        );
+                        final ok = widget.state.updateMyProfile(newProf);
+                        if (ok) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Tactical Profile saved and broadcasted to mesh peers!'),
+                              backgroundColor: Colors.teal,
+                            ),
+                          );
+                        }
+                      },
                     ),
                   ),
                 ],

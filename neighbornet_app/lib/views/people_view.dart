@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/neighbornet_models.dart';
 import '../state/neighbornet_state.dart';
 
@@ -30,6 +31,312 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
   void dispose() {
     _pulseController.dispose();
     super.dispose();
+  }
+
+
+  Widget _buildTacticalAvatarBadge(String avatarKey, bool isTransport, {double radius = 20}) {
+    IconData icon;
+    Color color;
+    switch (avatarKey) {
+      case 'tactical_medic':
+        icon = Icons.medical_services_outlined;
+        color = Colors.redAccent;
+        break;
+      case 'tactical_radio':
+        icon = Icons.radio_outlined;
+        color = Colors.cyan;
+        break;
+      case 'tactical_solar':
+        icon = Icons.bolt_outlined;
+        color = Colors.amber;
+        break;
+      case 'tactical_shield':
+        icon = Icons.shield_outlined;
+        color = Colors.purpleAccent;
+        break;
+      case 'tactical_water':
+        icon = Icons.water_drop_outlined;
+        color = Colors.lightBlueAccent;
+        break;
+      case 'tactical_recon':
+        icon = Icons.explore_outlined;
+        color = Colors.orangeAccent;
+        break;
+      case 'tactical_engineer':
+        icon = Icons.handyman_outlined;
+        color = Colors.teal;
+        break;
+      default:
+        icon = isTransport ? Icons.router_outlined : Icons.person_outline_rounded;
+        color = isTransport ? Colors.deepPurple : Colors.blueGrey;
+        break;
+    }
+
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: color.withValues(alpha: 0.2),
+      child: Icon(icon, color: color, size: radius * 1.1),
+    );
+  }
+
+  void _showTacticalProfileDialog(BuildContext context, PeerInfo peer) {
+    final profile = widget.state.getProfileForPeer(peer.destHash);
+    final avatarKey = profile?.avatarBase64 ?? '';
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+          title: Row(
+            children: [
+              _buildTacticalAvatarBadge(avatarKey, peer.isTransport, radius: 24),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            profile?.nickname.isNotEmpty == true ? profile!.nickname : peer.nickname,
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (peer.isTransport) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.deepPurple.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'RELAY',
+                              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        if (profile?.callsign.isNotEmpty == true)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.cyan.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.cyan.withValues(alpha: 0.3)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.cell_tower_rounded, size: 12, color: Colors.cyan),
+                                const SizedBox(width: 4),
+                                Text(
+                                  profile!.callsign,
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.cyan),
+                                ),
+                              ],
+                            ),
+                          ),
+                        if (profile?.neighborhoodZone.isNotEmpty == true)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.location_on_outlined, size: 12, color: Colors.amber),
+                                const SizedBox(width: 4),
+                                Text(
+                                  profile!.neighborhoodZone,
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amber),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Divider(),
+                  const SizedBox(height: 10),
+
+                  // Cryptographic Sovereign Verification
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(dialogCtx).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.verified_user_rounded, color: Colors.green, size: 15),
+                            SizedBox(width: 6),
+                            Text(
+                              'Verified Reticulum Sovereign Key',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SelectableText(
+                                peer.destHash,
+                                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, size: 16),
+                              tooltip: 'Copy Key Hash',
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: peer.destHash));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Copied hash to clipboard!')),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        Text(
+                          'Transport link: ${peer.addr}',
+                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Bio Section
+                  if (profile?.bio.isNotEmpty == true) ...[
+                    const SizedBox(height: 16),
+                    const Text('Field Role / Mission Summary:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(dialogCtx).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        profile!.bio,
+                        style: const TextStyle(fontSize: 13, height: 1.3),
+                      ),
+                    ),
+                  ],
+
+                  // Skills & Capabilities Matrix
+                  if (profile != null && profile.skills.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const Text('Emergency Skills & Mutual Aid Capabilities:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: profile.skills.map((skill) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(dialogCtx).colorScheme.primaryContainer.withValues(alpha: 0.4),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Theme.of(dialogCtx).colorScheme.primary.withValues(alpha: 0.3)),
+                          ),
+                          child: Text(
+                            skill,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(dialogCtx).colorScheme.primary,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+
+                  // Alternate Contact
+                  if (profile?.contactInfo.isNotEmpty == true) ...[
+                    const SizedBox(height: 16),
+                    const Text('Alternate Contact / Comms Channel:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      profile!.contactInfo,
+                      style: const TextStyle(fontSize: 12, color: Colors.tealAccent),
+                    ),
+                  ],
+
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.phone_rounded, size: 16),
+              label: const Text('Voice Call'),
+              onPressed: () {
+                Navigator.pop(dialogCtx);
+                _startCall(context, peer, withVideo: false);
+              },
+            ),
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.videocam_rounded, size: 16),
+              label: const Text('Video Call'),
+              onPressed: () {
+                Navigator.pop(dialogCtx);
+                _startCall(context, peer, withVideo: true);
+              },
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
+              label: const Text('Direct Whisper'),
+              onPressed: () {
+                Navigator.pop(dialogCtx);
+                widget.state.selectDirectMessage(peer);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Switched to Direct Whisper with ${peer.nickname} (E2EE)'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _startCall(BuildContext context, PeerInfo peer, {bool withVideo = false}) {
@@ -231,22 +538,35 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
             ),
           ),
           child: ListTile(
+            onTap: () => _showTacticalProfileDialog(context, peer),
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            leading: CircleAvatar(
-              backgroundColor: peer.isTransport ? Colors.deepPurple.shade100 : Colors.blue.shade100,
-              child: Icon(
-                peer.isTransport ? Icons.router_outlined : Icons.person_outline,
-                color: peer.isTransport ? Colors.deepPurple : Colors.blue,
-              ),
+            leading: _buildTacticalAvatarBadge(
+              widget.state.getProfileForPeer(peer.destHash)?.avatarBase64 ?? '',
+              peer.isTransport,
             ),
             title: Row(
               children: [
                 Text(
-                  peer.nickname,
+                  widget.state.getProfileForPeer(peer.destHash)?.nickname.isNotEmpty == true
+                      ? widget.state.getProfileForPeer(peer.destHash)!.nickname
+                      : peer.nickname,
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(width: 8),
-                if (peer.isTransport)
+                if (widget.state.getProfileForPeer(peer.destHash)?.callsign.isNotEmpty == true)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.cyan.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      widget.state.getProfileForPeer(peer.destHash)!.callsign,
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyan),
+                    ),
+                  ),
+                if (peer.isTransport) ...[
+                  const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
@@ -262,6 +582,7 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
                       ),
                     ),
                   ),
+                ],
               ],
             ),
             subtitle: Column(
@@ -282,6 +603,12 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.badge_outlined, size: 18),
+                  tooltip: 'Inspect Tactical Profile',
+                  onPressed: () => _showTacticalProfileDialog(context, peer),
+                ),
+                const SizedBox(width: 6),
                 IconButton.filledTonal(
                   icon: const Icon(Icons.phone_rounded, size: 18),
                   tooltip: '1-Tap Voice Call',

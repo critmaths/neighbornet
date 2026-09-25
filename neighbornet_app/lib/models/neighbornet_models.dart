@@ -528,3 +528,106 @@ class FormEntry {
   }
 }
 
+const List<String> kStandardTacticalSkills = [
+  'Medical / First Aid',
+  'HAM Radio Operator',
+  'Search & Rescue',
+  'Solar & Off-Grid Power',
+  'Water Purification',
+  'Logistics & Supplies',
+  'Carpentry & Shelter',
+  'Comms & Security',
+  'Fire & Hazard Response',
+  'Vehicle / Mechanical Repair',
+];
+
+class UserProfile {
+  final String destHash;
+  final String nickname;
+  final String bio;
+  final String avatarBase64;
+  final String callsign;
+  final String contactInfo;
+  final String neighborhoodZone;
+  final List<String> skills;
+  final int updatedAtSec;
+
+  UserProfile({
+    required this.destHash,
+    required this.nickname,
+    this.bio = '',
+    this.avatarBase64 = '',
+    this.callsign = '',
+    this.contactInfo = '',
+    this.neighborhoodZone = '',
+    this.skills = const [],
+    this.updatedAtSec = 0,
+  });
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    var rawSkills = json['skills'];
+    List<String> parsedSkills = [];
+    if (rawSkills is List) {
+      parsedSkills = rawSkills.map((e) => e.toString()).toList();
+    } else if (rawSkills is String && rawSkills.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawSkills);
+        if (decoded is List) {
+          parsedSkills = decoded.map((e) => e.toString()).toList();
+        }
+      } catch (_) {}
+    }
+
+    return UserProfile(
+      destHash: json['dest_hash'] as String? ?? '',
+      nickname: json['nickname'] as String? ?? 'Neighbor',
+      bio: json['bio'] as String? ?? '',
+      avatarBase64: json['avatar_base64'] as String? ?? '',
+      callsign: json['callsign'] as String? ?? '',
+      contactInfo: json['contact_info'] as String? ?? '',
+      neighborhoodZone: json['neighborhood_zone'] as String? ?? '',
+      skills: parsedSkills,
+      updatedAtSec: (json['updated_at_sec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'dest_hash': destHash,
+      'nickname': nickname,
+      'bio': bio,
+      'avatar_base64': avatarBase64,
+      'callsign': callsign,
+      'contact_info': contactInfo,
+      'neighborhood_zone': neighborhoodZone,
+      'skills': skills,
+      'updated_at_sec': updatedAtSec,
+    };
+  }
+
+  UserProfile copyWith({
+    String? destHash,
+    String? nickname,
+    String? bio,
+    String? avatarBase64,
+    String? callsign,
+    String? contactInfo,
+    String? neighborhoodZone,
+    List<String>? skills,
+    int? updatedAtSec,
+  }) {
+    return UserProfile(
+      destHash: destHash ?? this.destHash,
+      nickname: nickname ?? this.nickname,
+      bio: bio ?? this.bio,
+      avatarBase64: avatarBase64 ?? this.avatarBase64,
+      callsign: callsign ?? this.callsign,
+      contactInfo: contactInfo ?? this.contactInfo,
+      neighborhoodZone: neighborhoodZone ?? this.neighborhoodZone,
+      skills: skills ?? this.skills,
+      updatedAtSec: updatedAtSec ?? this.updatedAtSec,
+    );
+  }
+}
+
+
