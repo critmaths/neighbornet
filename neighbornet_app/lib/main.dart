@@ -12,6 +12,7 @@ import 'views/forms_view.dart';
 import 'views/ptt_walkie_talkie_view.dart';
 import 'views/tactical_map_view.dart';
 import 'views/traceroute_view.dart';
+import 'views/files_view.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
@@ -179,6 +180,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Bulletin'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.folder_shared_outlined),
+                    selectedIcon: Icon(Icons.folder_shared),
+                    label: Text('Files & Vault'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.assignment_outlined),
                     selectedIcon: Icon(Icons.assignment),
                     label: Text('Community Forms'),
@@ -246,22 +252,24 @@ class _MainShellState extends State<MainShell> {
       case 1:
         return BulletinView(state: widget.state);
       case 2:
-        return FormsView(state: widget.state);
+        return FilesView(state: widget.state);
       case 3:
-        return const TacticalMapView();
+        return FormsView(state: widget.state);
       case 4:
-        return TracerouteView(onSwitchToMap: () => setState(() => _selectedIndex = 3));
+        return const TacticalMapView();
       case 5:
-        return PeopleView(state: widget.state);
+        return const TracerouteView();
       case 6:
-        return const VoiceChatView();
+        return PeopleView(state: widget.state);
       case 7:
-        return PttWalkieTalkieView(state: widget.state);
+        return const VoiceChatView();
       case 8:
-        return SurvivalManualView(state: widget.state);
+        return PttWalkieTalkieView(state: widget.state);
       case 9:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 10:
+        return EmergencyView(state: widget.state);
+      case 11:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

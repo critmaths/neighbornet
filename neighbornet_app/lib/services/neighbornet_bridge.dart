@@ -109,6 +109,16 @@ typedef _DartGetTracerouteById = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _NativeSimulateTrace = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _DartSimulateTrace = Pointer<Utf8> Function(Pointer<Utf8>);
 
+typedef _NativePublishFileExtended = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+typedef _DartPublishFileExtended = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+
+typedef _NativeExportFile = Bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartExportFile = bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -129,9 +139,13 @@ class NeighborNetBridge {
   late _DartFreeString _freeString;
 
   late _DartPublishFile _publishFile;
+  late _DartPublishFileExtended _publishFileExtended;
   late _DartGetJson _getSharedFilesJson;
   late _DartRequestFile _requestFile;
   late _DartGetFilePath _getFilePath;
+  late _DartGetRoomData _getFileChunkStatusJson;
+  late _DartDeleteMarker _deleteFile;
+  late _DartExportFile _exportFile;
 
   late _DartCreateRoom _createRoom;
   late _DartGetJson _getRoomsJson;
@@ -212,9 +226,13 @@ class NeighborNetBridge {
     _freeString = _dylib!.lookupFunction<_NativeFreeString, _DartFreeString>('neighbornet_free_string');
 
     _publishFile = _dylib!.lookupFunction<_NativePublishFile, _DartPublishFile>('neighbornet_publish_file');
+    _publishFileExtended = _dylib!.lookupFunction<_NativePublishFileExtended, _DartPublishFileExtended>('neighbornet_publish_file_extended');
     _getSharedFilesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_shared_files_json');
     _requestFile = _dylib!.lookupFunction<_NativeRequestFile, _DartRequestFile>('neighbornet_request_file');
     _getFilePath = _dylib!.lookupFunction<_NativeGetFilePath, _DartGetFilePath>('neighbornet_get_file_path');
+    _getFileChunkStatusJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_file_chunk_status_json');
+    _deleteFile = _dylib!.lookupFunction<_NativeDeleteMarker, _DartDeleteMarker>('neighbornet_delete_file');
+    _exportFile = _dylib!.lookupFunction<_NativeExportFile, _DartExportFile>('neighbornet_export_file');
 
     _createRoom = _dylib!.lookupFunction<_NativeCreateRoom, _DartCreateRoom>('neighbornet_create_room');
     _getRoomsJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_rooms_json');
@@ -424,6 +442,90 @@ class NeighborNetBridge {
       }
     } finally {
       calloc.free(hashPtr);
+    }
+  }
+
+  String? publishFileExtended({
+    required String filePath,
+    required String description,
+    String category = 'documents',
+    String groupTag = 'Public Vault',
+    String? passphrase,
+  }) {
+    if (!_isInitialized) return null;
+    final pathPtr = filePath.toNativeUtf8();
+    final descPtr = description.toNativeUtf8();
+    final catPtr = category.toNativeUtf8();
+    final tagPtr = groupTag.toNativeUtf8();
+    final passPtr = passphrase != null && passphrase.isNotEmpty ? passphrase.toNativeUtf8() : nullptr;
+    try {
+      final ptr = _publishFileExtended(pathPtr, descPtr, catPtr, tagPtr, passPtr);
+      if (ptr == nullptr) return null;
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(pathPtr);
+      calloc.free(descPtr);
+      calloc.free(catPtr);
+      calloc.free(tagPtr);
+      if (passPtr != nullptr) calloc.free(passPtr);
+    }
+  }
+
+  FileChunkProgress? getFileChunkStatus(String fileHash) {
+    if (!_isInitialized) return null;
+    final hashPtr = fileHash.toNativeUtf8();
+    try {
+      final ptr = _getFileChunkStatusJson(hashPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return FileChunkProgress.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(hashPtr);
+    }
+  }
+
+  bool deleteFile(String fileHash) {
+    if (!_isInitialized) return false;
+    final hashPtr = fileHash.toNativeUtf8();
+    try {
+      return _deleteFile(hashPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(hashPtr);
+    }
+  }
+
+  bool exportFile({
+    required String fileHash,
+    required String targetPath,
+    String? passphrase,
+  }) {
+    if (!_isInitialized) return false;
+    final hashPtr = fileHash.toNativeUtf8();
+    final targetPtr = targetPath.toNativeUtf8();
+    final passPtr = passphrase != null && passphrase.isNotEmpty ? passphrase.toNativeUtf8() : nullptr;
+    try {
+      return _exportFile(hashPtr, targetPtr, passPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(hashPtr);
+      calloc.free(targetPtr);
+      if (passPtr != nullptr) calloc.free(passPtr);
     }
   }
 

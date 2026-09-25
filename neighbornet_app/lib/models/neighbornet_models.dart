@@ -339,6 +339,11 @@ class SharedFileInfo {
   final String authorNickname;
   final int timestampSec;
   final bool isComplete;
+  final String category;
+  final String groupTag;
+  final bool isEncrypted;
+  final String mimeType;
+  final String encryptionSalt;
 
   SharedFileInfo({
     required this.fileHash,
@@ -351,6 +356,11 @@ class SharedFileInfo {
     required this.authorNickname,
     required this.timestampSec,
     required this.isComplete,
+    this.category = 'documents',
+    this.groupTag = 'Public Vault',
+    this.isEncrypted = false,
+    this.mimeType = 'application/octet-stream',
+    this.encryptionSalt = '',
   });
 
   factory SharedFileInfo.fromJson(Map<String, dynamic> json) {
@@ -365,6 +375,11 @@ class SharedFileInfo {
       authorNickname: json['author_nickname'] as String? ?? 'Anonymous',
       timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? 0,
       isComplete: json['is_complete'] as bool? ?? false,
+      category: json['category'] as String? ?? 'documents',
+      groupTag: json['group_tag'] as String? ?? 'Public Vault',
+      isEncrypted: json['is_encrypted'] as bool? ?? false,
+      mimeType: json['mime_type'] as String? ?? 'application/octet-stream',
+      encryptionSalt: json['encryption_salt'] as String? ?? '',
     );
   }
 
@@ -374,6 +389,38 @@ class SharedFileInfo {
       return '${(fileSizeBytes / 1024).toStringAsFixed(1)} KB';
     }
     return '${(fileSizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+}
+
+class FileChunkProgress {
+  final String fileHash;
+  final String filename;
+  final int downloadedChunks;
+  final int totalChunks;
+  final double progressPercent;
+  final bool isComplete;
+  final String? filePath;
+
+  FileChunkProgress({
+    required this.fileHash,
+    required this.filename,
+    required this.downloadedChunks,
+    required this.totalChunks,
+    required this.progressPercent,
+    required this.isComplete,
+    this.filePath,
+  });
+
+  factory FileChunkProgress.fromJson(Map<String, dynamic> json) {
+    return FileChunkProgress(
+      fileHash: json['file_hash'] as String? ?? '',
+      filename: json['filename'] as String? ?? '',
+      downloadedChunks: (json['downloaded_chunks'] as num?)?.toInt() ?? 0,
+      totalChunks: (json['total_chunks'] as num?)?.toInt() ?? 0,
+      progressPercent: (json['progress_percent'] as num?)?.toDouble() ?? 0.0,
+      isComplete: json['is_complete'] as bool? ?? false,
+      filePath: json['file_path'] as String?,
+    );
   }
 }
 

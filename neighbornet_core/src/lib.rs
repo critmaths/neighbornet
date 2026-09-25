@@ -130,6 +130,35 @@ pub struct SharedFileMeta {
     pub author_nickname: String,
     pub timestamp_sec: u64,
     pub is_complete: bool,
+    #[serde(default = "default_file_category")]
+    pub category: String,
+    #[serde(default = "default_file_group_tag")]
+    pub group_tag: String,
+    #[serde(default)]
+    pub is_encrypted: bool,
+    #[serde(default)]
+    pub mime_type: String,
+    #[serde(default)]
+    pub encryption_salt: String,
+}
+
+fn default_file_category() -> String {
+    "documents".to_string()
+}
+
+fn default_file_group_tag() -> String {
+    "Public Vault".to_string()
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct FileChunkProgress {
+    pub file_hash: String,
+    pub filename: String,
+    pub downloaded_chunks: usize,
+    pub total_chunks: usize,
+    pub progress_percent: f32,
+    pub is_complete: bool,
+    pub file_path: Option<String>,
 }
 
 // --- GOVERNANCE & ROOM STRUCTURES ---
@@ -367,6 +396,131 @@ fn compute_hash(data: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+fn infer_mime_type(filename: &str) -> String {
+    let lower = filename.to_lowercase();
+    if lower.ends_with(".png") {
+        "image/png".to_string()
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg".to_string()
+    } else if lower.ends_with(".gif") {
+        "image/gif".to_string()
+    } else if lower.ends_with(".pdf") {
+        "application/pdf".to_string()
+    } else if lower.ends_with(".txt") || lower.ends_with(".md") || lower.ends_with(".log") {
+        "text/plain".to_string()
+    } else if lower.ends_with(".json") {
+        "application/json".to_string()
+    } else if lower.ends_with(".zip") || lower.ends_with(".tar") || lower.ends_with(".gz") || lower.ends_with(".7z") {
+        "application/zip".to_string()
+    } else if lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".ogg") || lower.ends_with(".m4a") {
+        "audio/mpeg".to_string()
+    } else if lower.ends_with(".mp4") || lower.ends_with(".mkv") || lower.ends_with(".mov") {
+        "video/mp4".to_string()
+    } else if lower.ends_with(".geojson") || lower.ends_with(".kml") || lower.ends_with(".mbtiles") {
+        "application/geo+json".to_string()
+    } else {
+        "application/octet-stream".to_string()
+    }
+}
+
+const VAULT_MAGIC: &[u8] = b"NNET_VAULT_V1\n";
+
+fn encrypt_vault_payload(plaintext: &[u8], passphrase: &str) -> (Vec<u8>, String) {
+    let mut rng = OsRng;
+    let mut salt_bytes = [0u8; 16];
+    rand_core::RngCore::fill_bytes(&mut rng, &mut salt_bytes);
+    let salt_hex = hex::encode(salt_bytes);
+
+    let mut key_hasher = Sha256::new();
+    key_hasher.update(&salt_bytes);
+    key_hasher.update(passphrase.as_bytes());
+    key_hasher.update(b"NNET_VAULT_KEY");
+    let key = key_hasher.finalize();
+
+    let mut ciphertext = Vec::with_capacity(plaintext.len());
+    let mut counter: u64 = 0;
+    let mut offset = 0;
+    while offset < plaintext.len() {
+        let mut block_hasher = Sha256::new();
+        block_hasher.update(&key);
+        block_hasher.update(&counter.to_le_bytes());
+        let block_key = block_hasher.finalize();
+
+        let chunk_len = std::cmp::min(32, plaintext.len() - offset);
+        for i in 0..chunk_len {
+            ciphertext.push(plaintext[offset + i] ^ block_key[i]);
+        }
+        offset += chunk_len;
+        counter += 1;
+    }
+
+    let mut tag_hasher = Sha256::new();
+    tag_hasher.update(&key);
+    tag_hasher.update(b"NNET_AUTH");
+    tag_hasher.update(&ciphertext);
+    let tag_hex = hex::encode(tag_hasher.finalize());
+
+    let mut packaged = Vec::new();
+    packaged.extend_from_slice(VAULT_MAGIC);
+    packaged.extend_from_slice(salt_hex.as_bytes());
+    packaged.push(b'\n');
+    packaged.extend_from_slice(tag_hex.as_bytes());
+    packaged.push(b'\n');
+    packaged.extend_from_slice(&ciphertext);
+
+    (packaged, salt_hex)
+}
+
+fn decrypt_vault_payload(packaged: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
+    if !packaged.starts_with(VAULT_MAGIC) {
+        return Err("Invalid vault file format or missing magic header".to_string());
+    }
+    let rest = &packaged[VAULT_MAGIC.len()..];
+    let mut lines = rest.splitn(3, |&b| b == b'\n');
+    let salt_line = lines.next().ok_or("Corrupt vault: missing salt")?;
+    let tag_line = lines.next().ok_or("Corrupt vault: missing auth tag")?;
+    let ciphertext = lines.next().ok_or("Corrupt vault: missing payload")?;
+
+    let salt_hex = std::str::from_utf8(salt_line).map_err(|_| "Invalid salt encoding")?;
+    let salt_bytes = hex::decode(salt_hex).map_err(|_| "Invalid salt hex")?;
+    let expected_tag_hex = std::str::from_utf8(tag_line).map_err(|_| "Invalid tag encoding")?;
+
+    let mut key_hasher = Sha256::new();
+    key_hasher.update(&salt_bytes);
+    key_hasher.update(passphrase.as_bytes());
+    key_hasher.update(b"NNET_VAULT_KEY");
+    let key = key_hasher.finalize();
+
+    let mut tag_hasher = Sha256::new();
+    tag_hasher.update(&key);
+    tag_hasher.update(b"NNET_AUTH");
+    tag_hasher.update(ciphertext);
+    let computed_tag_hex = hex::encode(tag_hasher.finalize());
+
+    if computed_tag_hex != expected_tag_hex {
+        return Err("Incorrect passphrase or corrupted encrypted vault chunk".to_string());
+    }
+
+    let mut plaintext = Vec::with_capacity(ciphertext.len());
+    let mut counter: u64 = 0;
+    let mut offset = 0;
+    while offset < ciphertext.len() {
+        let mut block_hasher = Sha256::new();
+        block_hasher.update(&key);
+        block_hasher.update(&counter.to_le_bytes());
+        let block_key = block_hasher.finalize();
+
+        let chunk_len = std::cmp::min(32, ciphertext.len() - offset);
+        for i in 0..chunk_len {
+            plaintext.push(ciphertext[offset + i] ^ block_key[i]);
+        }
+        offset += chunk_len;
+        counter += 1;
+    }
+
+    Ok(plaintext)
 }
 
 fn load_or_create_identity(data_dir: &Path) -> (PrivateIdentity, String) {
@@ -1633,25 +1787,55 @@ impl NeighborNode {
         self.inner.user_profiles.read().values().cloned().collect()
     }
 
-    // --- DECENTRALIZED FILE SHARING SUBSYSTEM ---
+    // --- DECENTRALIZED FILE SHARING & ENCRYPTED VAULT SUBSYSTEM ---
 
     pub fn publish_file(&self, src_path: &Path, description: String) -> Result<String, String> {
+        self.publish_file_extended(
+            src_path,
+            description,
+            "documents".to_string(),
+            "Public Vault".to_string(),
+            None,
+        )
+    }
+
+    pub fn publish_file_extended(
+        &self,
+        src_path: &Path,
+        description: String,
+        category: String,
+        group_tag: String,
+        passphrase_opt: Option<String>,
+    ) -> Result<String, String> {
         if !src_path.exists() {
             return Err("File not found on local filesystem".to_string());
         }
 
-        let file_bytes = fs::read(src_path).map_err(|e| format!("Failed to read file: {e}"))?;
-        let file_size = file_bytes.len() as u64;
-
-        let mut hasher = Sha256::new();
-        hasher.update(&file_bytes);
-        let file_hash = hex::encode(hasher.finalize());
-
+        let raw_bytes = fs::read(src_path).map_err(|e| format!("Failed to read file: {e}"))?;
         let filename = src_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("document")
             .to_string();
+
+        let mime_type = infer_mime_type(&filename);
+        let is_encrypted = passphrase_opt.as_ref().map(|p| !p.trim().is_empty()).unwrap_or(false);
+
+        let (file_bytes, encryption_salt) = if let Some(ref pass) = passphrase_opt {
+            if !pass.trim().is_empty() {
+                encrypt_vault_payload(&raw_bytes, pass)
+            } else {
+                (raw_bytes, String::new())
+            }
+        } else {
+            (raw_bytes, String::new())
+        };
+
+        let file_size = file_bytes.len() as u64;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&file_bytes);
+        let file_hash = hex::encode(hasher.finalize());
 
         let chunk_count = if file_bytes.is_empty() {
             1
@@ -1685,6 +1869,11 @@ impl NeighborNode {
             author_nickname: self.inner.nickname.read().clone(),
             timestamp_sec: current_epoch_sec(),
             is_complete: true,
+            category,
+            group_tag,
+            is_encrypted,
+            mime_type,
+            encryption_salt,
         };
 
         let meta_dir = self.inner.data_dir.join("files").join("meta");
@@ -1755,6 +1944,90 @@ impl NeighborNode {
         } else {
             None
         }
+    }
+
+    pub fn get_file_chunk_status(&self, file_hash: &str) -> Option<FileChunkProgress> {
+        let files = self.inner.files.read();
+        let meta = files.get(file_hash)?.clone();
+        drop(files);
+
+        let chunk_dir = self.inner.data_dir.join("files").join("chunks").join(file_hash);
+        let mut downloaded = 0;
+        if chunk_dir.exists() {
+            for i in 0..meta.chunk_count {
+                if chunk_dir.join(i.to_string()).exists() {
+                    downloaded += 1;
+                }
+            }
+        }
+
+        let completed_path = self.get_completed_file_path(file_hash).map(|p| p.to_string_lossy().into_owned());
+        let is_complete = meta.is_complete || (meta.chunk_count > 0 && downloaded == meta.chunk_count);
+        let progress_percent = if meta.chunk_count == 0 {
+            100.0
+        } else {
+            (downloaded as f32 / meta.chunk_count as f32) * 100.0
+        };
+
+        Some(FileChunkProgress {
+            file_hash: file_hash.to_string(),
+            filename: meta.filename,
+            downloaded_chunks: downloaded,
+            total_chunks: meta.chunk_count,
+            progress_percent,
+            is_complete,
+            file_path: completed_path,
+        })
+    }
+
+    pub fn delete_shared_file(&self, file_hash: &str) -> bool {
+        let mut files = self.inner.files.write();
+        let removed = files.remove(file_hash).is_some();
+        drop(files);
+
+        let meta_file = self.inner.data_dir.join("files").join("meta").join(format!("{file_hash}.json"));
+        let _ = fs::remove_file(meta_file);
+
+        let chunks_dir = self.inner.data_dir.join("files").join("chunks").join(file_hash);
+        if chunks_dir.exists() {
+            let _ = fs::remove_dir_all(chunks_dir);
+        }
+
+        let completed_dir = self.inner.data_dir.join("files").join("completed").join(file_hash);
+        if completed_dir.exists() {
+            let _ = fs::remove_dir_all(completed_dir);
+        }
+
+        removed
+    }
+
+    pub fn export_file(
+        &self,
+        file_hash: &str,
+        target_path: &Path,
+        passphrase_opt: Option<&str>,
+    ) -> Result<bool, String> {
+        let files = self.inner.files.read();
+        let meta = files.get(file_hash).cloned().ok_or("File not found in mesh catalog")?;
+        drop(files);
+
+        let comp_path = self
+            .get_completed_file_path(file_hash)
+            .ok_or("File is not yet fully downloaded or completed")?;
+        let raw_bytes = fs::read(&comp_path).map_err(|e| format!("Failed reading completed file: {e}"))?;
+
+        let final_bytes = if meta.is_encrypted {
+            let pass = passphrase_opt.ok_or("Passphrase is required to decrypt this encrypted vault file")?;
+            decrypt_vault_payload(&raw_bytes, pass)?
+        } else {
+            raw_bytes
+        };
+
+        if let Some(parent) = target_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(target_path, final_bytes).map_err(|e| format!("Failed writing export file: {e}"))?;
+        Ok(true)
     }
 
     // --- DYNAMIC ROOMS & DEMOCRATIC GOVERNANCE SUBSYSTEM ---
@@ -3361,6 +3634,56 @@ pub extern "C" fn neighbornet_publish_file(
 }
 
 #[no_mangle]
+pub extern "C" fn neighbornet_publish_file_extended(
+    file_path_c: *const c_char,
+    description_c: *const c_char,
+    category_c: *const c_char,
+    group_tag_c: *const c_char,
+    passphrase_c: *const c_char,
+) -> *mut c_char {
+    if file_path_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let file_path_str = unsafe { CStr::from_ptr(file_path_c).to_string_lossy().into_owned() };
+    let desc_str = if description_c.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(description_c).to_string_lossy().into_owned() }
+    };
+    let cat_str = if category_c.is_null() {
+        "documents".to_string()
+    } else {
+        unsafe { CStr::from_ptr(category_c).to_string_lossy().into_owned() }
+    };
+    let tag_str = if group_tag_c.is_null() {
+        "Public Vault".to_string()
+    } else {
+        unsafe { CStr::from_ptr(group_tag_c).to_string_lossy().into_owned() }
+    };
+    let pass_opt = if passphrase_c.is_null() {
+        None
+    } else {
+        let p = unsafe { CStr::from_ptr(passphrase_c).to_string_lossy().into_owned() };
+        if p.trim().is_empty() {
+            None
+        } else {
+            Some(p)
+        }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.publish_file_extended(Path::new(&file_path_str), desc_str, cat_str, tag_str, pass_opt) {
+        Ok(hash) => to_c_string(hash),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn neighbornet_get_shared_files_json() -> *mut c_char {
     let lock = GLOBAL_NODE.read();
     let node = match lock.as_ref() {
@@ -3403,6 +3726,76 @@ pub extern "C" fn neighbornet_get_file_path(file_hash_c: *const c_char) -> *mut 
     match node.get_completed_file_path(&hash) {
         Some(p) => to_c_string(p.to_string_lossy().into_owned()),
         None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_file_chunk_status_json(file_hash_c: *const c_char) -> *mut c_char {
+    if file_hash_c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return std::ptr::null_mut(),
+    };
+
+    match node.get_file_chunk_status(&hash) {
+        Some(st) => {
+            let json = serde_json::to_string(&st).unwrap_or_default();
+            to_c_string(json)
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_delete_file(file_hash_c: *const c_char) -> bool {
+    if file_hash_c.is_null() {
+        return false;
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.delete_shared_file(&hash)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_export_file(
+    file_hash_c: *const c_char,
+    target_path_c: *const c_char,
+    passphrase_c: *const c_char,
+) -> bool {
+    if file_hash_c.is_null() || target_path_c.is_null() {
+        return false;
+    }
+    let hash = unsafe { CStr::from_ptr(file_hash_c).to_string_lossy().into_owned() };
+    let target_path_str = unsafe { CStr::from_ptr(target_path_c).to_string_lossy().into_owned() };
+    let pass_opt = if passphrase_c.is_null() {
+        None
+    } else {
+        let p = unsafe { CStr::from_ptr(passphrase_c).to_string_lossy().into_owned() };
+        if p.trim().is_empty() {
+            None
+        } else {
+            Some(p)
+        }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    match node.export_file(&hash, Path::new(&target_path_str), pass_opt.as_deref()) {
+        Ok(res) => res,
+        Err(_) => false,
     }
 }
 

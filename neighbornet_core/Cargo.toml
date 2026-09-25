@@ -27,3 +27,9 @@ serialport = "4.7"
 
 [dev-dependencies]
 tempfile = "3.8"
+
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1

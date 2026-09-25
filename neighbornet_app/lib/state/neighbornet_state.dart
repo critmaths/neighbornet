@@ -554,6 +554,27 @@ class NeighborNetState extends ChangeNotifier {
     return hash;
   }
 
+  String? publishFileExtended({
+    required String path,
+    required String description,
+    String category = 'documents',
+    String groupTag = 'Public Vault',
+    String? passphrase,
+  }) {
+    final hash = _bridge.publishFileExtended(
+      filePath: path,
+      description: description,
+      category: category,
+      groupTag: groupTag,
+      passphrase: passphrase,
+    );
+    if (hash != null) {
+      _sharedFiles = _bridge.getSharedFiles();
+      notifyListeners();
+    }
+    return hash;
+  }
+
   bool requestFileDownload(String fileHash) {
     final success = _bridge.requestFile(fileHash);
     if (success) {
@@ -561,6 +582,36 @@ class NeighborNetState extends ChangeNotifier {
       notifyListeners();
     }
     return success;
+  }
+
+  FileChunkProgress? getFileChunkStatus(String fileHash) {
+    return _bridge.getFileChunkStatus(fileHash);
+  }
+
+  bool deleteSharedFile(String fileHash) {
+    final ok = _bridge.deleteFile(fileHash);
+    if (ok) {
+      _sharedFiles = _bridge.getSharedFiles();
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  bool exportSharedFile({
+    required String fileHash,
+    required String targetPath,
+    String? passphrase,
+  }) {
+    return _bridge.exportFile(
+      fileHash: fileHash,
+      targetPath: targetPath,
+      passphrase: passphrase,
+    );
+  }
+
+  void refreshSharedFiles() {
+    _sharedFiles = _bridge.getSharedFiles();
+    notifyListeners();
   }
 
   String? getCompletedFilePath(String fileHash) {
