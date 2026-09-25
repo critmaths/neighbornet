@@ -43,6 +43,9 @@ dependencies:
   provider: ^6.1.1
   windows_notification: ^1.2.0
   file_picker: ^8.1.4
+  qr_flutter: ^4.1.0
+  zxing2: ^0.2.4
+  image: ^4.10.1
 
 dev_dependencies:
   flutter_test:

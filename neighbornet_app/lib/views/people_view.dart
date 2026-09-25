@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/neighbornet_models.dart';
 import '../state/neighbornet_state.dart';
+import '../widgets/qr_identity_dialog.dart';
+import '../widgets/qr_scanner_dialog.dart';
 
 class PeopleView extends StatefulWidget {
   final NeighborNetState state;
@@ -299,6 +301,19 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
             ),
           ),
           actions: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.qr_code_2_rounded, size: 16),
+              label: const Text('QR Card'),
+              onPressed: () {
+                Navigator.pop(dialogCtx);
+                final profToDisplay = profile ??
+                    UserProfile(
+                      destHash: peer.destHash,
+                      nickname: peer.nickname,
+                    );
+                QrIdentityDialog.show(context, profToDisplay);
+              },
+            ),
             FilledButton.tonalIcon(
               icon: const Icon(Icons.phone_rounded, size: 16),
               label: const Text('Voice Call'),
@@ -371,78 +386,107 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 10,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'People & Nodes',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Discovered cryptographic participants on local Wi-Fi, Ethernet, and mesh links',
-                      style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment<int>(
-                    value: 0,
-                    icon: Icon(Icons.format_list_bulleted_rounded, size: 18),
-                    label: Text('List'),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'People & Nodes',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                   ),
-                  ButtonSegment<int>(
-                    value: 1,
-                    icon: Icon(Icons.radar_rounded, size: 18),
-                    label: Text('Radar Map'),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Discovered cryptographic participants on local Wi-Fi, Ethernet, and mesh links',
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                 ],
-                selected: {_viewMode},
-                onSelectionChanged: (val) {
-                  setState(() {
-                    _viewMode = val.first;
-                    _selectedPeer = null;
-                  });
-                },
-                style: const ButtonStyle(
-                  visualDensity: VisualDensity.compact,
-                ),
               ),
-              const SizedBox(width: 16),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: (peers.isNotEmpty ? Colors.green : Colors.amber).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: peers.isNotEmpty ? Colors.green : Colors.amber,
-                      ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                    label: const Text('Scan QR / Add Contact'),
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${peers.length} Nearby ${peers.length == 1 ? 'Peer' : 'Peers'}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: peers.isNotEmpty ? Colors.green.shade900 : Colors.amber.shade900,
+                    onPressed: () => QrScannerDialog.show(context),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.qr_code_2_rounded),
+                    tooltip: 'My Tactical QR Identity',
+                    onPressed: () {
+                      final status = widget.state.status;
+                      final myProf = widget.state.myProfile ??
+                          UserProfile(
+                            destHash: status?.destHash ?? '',
+                            nickname: status?.nickname ?? 'Neighbor',
+                          );
+                      QrIdentityDialog.show(context, myProf);
+                    },
+                  ),
+                  SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment<int>(
+                        value: 0,
+                        icon: Icon(Icons.format_list_bulleted_rounded, size: 18),
+                        label: Text('List'),
                       ),
+                      ButtonSegment<int>(
+                        value: 1,
+                        icon: Icon(Icons.radar_rounded, size: 18),
+                        label: Text('Radar Map'),
+                      ),
+                    ],
+                    selected: {_viewMode},
+                    onSelectionChanged: (val) {
+                      setState(() {
+                        _viewMode = val.first;
+                        _selectedPeer = null;
+                      });
+                    },
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
                     ),
-                  ],
-                ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: (peers.isNotEmpty ? Colors.green : Colors.amber).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: peers.isNotEmpty ? Colors.green : Colors.amber,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${peers.length} Nearby ${peers.length == 1 ? 'Peer' : 'Peers'}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: peers.isNotEmpty ? Colors.green.shade900 : Colors.amber.shade900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

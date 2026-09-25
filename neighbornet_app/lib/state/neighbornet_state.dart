@@ -685,6 +685,24 @@ class NeighborNetState extends ChangeNotifier {
     return false;
   }
 
+  /// Imports an optical QR or air-gapped peer profile, storing it in memory and address book.
+  bool importPeerContact(UserProfile profile) {
+    if (profile.destHash.isEmpty) return false;
+    _peerProfiles[profile.destHash] = profile;
+    final existingPeer = _peers.any((p) => p.destHash == profile.destHash);
+    if (!existingPeer) {
+      _peers.add(PeerInfo(
+        destHash: profile.destHash,
+        nickname: profile.nickname.isNotEmpty ? profile.nickname : 'Neighbor',
+        addr: 'optical/air-gap',
+        isTransport: false,
+        lastSeenEpochSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      ));
+    }
+    notifyListeners();
+    return true;
+  }
+
   @override
   void dispose() {
     _pollTimer?.cancel();

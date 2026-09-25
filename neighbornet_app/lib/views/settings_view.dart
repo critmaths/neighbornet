@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import '../models/neighbornet_models.dart';
 import '../services/tray_and_window_service.dart';
 import '../state/neighbornet_state.dart';
+import '../widgets/qr_identity_dialog.dart';
+import '../widgets/qr_scanner_dialog.dart';
 
 class SettingsView extends StatefulWidget {
   final NeighborNetState state;
@@ -407,36 +409,65 @@ class _SettingsViewState extends State<SettingsView> {
 
                   const SizedBox(height: 20),
 
-                  // Save & Broadcast Button
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton.icon(
-                      icon: const Icon(Icons.cell_tower_rounded, size: 18),
-                      label: const Text('Save & Broadcast Profile to Mesh'),
-                      onPressed: () {
-                        final nick = _nickCtrl.text.trim().isEmpty ? (status?.nickname ?? 'Neighbor') : _nickCtrl.text.trim();
-                        final newProf = UserProfile(
-                          destHash: status?.destHash ?? '',
-                          nickname: nick,
-                          callsign: _callsignCtrl.text.trim(),
-                          neighborhoodZone: _zoneCtrl.text.trim(),
-                          contactInfo: _contactCtrl.text.trim(),
-                          bio: _bioCtrl.text.trim(),
-                          skills: _selectedSkills,
-                          avatarBase64: _selectedAvatar,
-                          updatedAtSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                        );
-                        final ok = widget.state.updateMyProfile(newProf);
-                        if (ok) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Tactical Profile saved and broadcasted to mesh peers!'),
-                              backgroundColor: Colors.teal,
-                            ),
+                  // Actions: QR Identity Card, Scan QR, and Save & Broadcast
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 10,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                        label: const Text('Air-Gapped QR Card'),
+                        onPressed: () {
+                          final currentProf = widget.state.myProfile ??
+                              UserProfile(
+                                destHash: status?.destHash ?? '',
+                                nickname: _nickCtrl.text.trim().isEmpty ? (status?.nickname ?? 'Neighbor') : _nickCtrl.text.trim(),
+                                callsign: _callsignCtrl.text.trim(),
+                                neighborhoodZone: _zoneCtrl.text.trim(),
+                                contactInfo: _contactCtrl.text.trim(),
+                                bio: _bioCtrl.text.trim(),
+                                skills: _selectedSkills,
+                                avatarBase64: _selectedAvatar,
+                              );
+                          QrIdentityDialog.show(context, currentProf);
+                        },
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                        label: const Text('Scan / Import QR'),
+                        onPressed: () {
+                          QrScannerDialog.show(context);
+                        },
+                      ),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.cell_tower_rounded, size: 18),
+                        label: const Text('Save & Broadcast Profile to Mesh'),
+                        onPressed: () {
+                          final nick = _nickCtrl.text.trim().isEmpty ? (status?.nickname ?? 'Neighbor') : _nickCtrl.text.trim();
+                          final newProf = UserProfile(
+                            destHash: status?.destHash ?? '',
+                            nickname: nick,
+                            callsign: _callsignCtrl.text.trim(),
+                            neighborhoodZone: _zoneCtrl.text.trim(),
+                            contactInfo: _contactCtrl.text.trim(),
+                            bio: _bioCtrl.text.trim(),
+                            skills: _selectedSkills,
+                            avatarBase64: _selectedAvatar,
+                            updatedAtSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
                           );
-                        }
-                      },
-                    ),
+                          final ok = widget.state.updateMyProfile(newProf);
+                          if (ok) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Tactical Profile saved and broadcasted to mesh peers!'),
+                                backgroundColor: Colors.teal,
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ],
                   ),
                 ],
               ),

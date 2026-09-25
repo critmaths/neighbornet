@@ -628,6 +628,71 @@ class UserProfile {
       updatedAtSec: updatedAtSec ?? this.updatedAtSec,
     );
   }
+
+  /// Generates a standardized tactical contact URI:
+  /// neighbornet://contact?dest=...&nick=...&call=...&zone=...&avatar=...&skills=...&contact=...&ts=...
+  String toContactUri() {
+    final queryParams = <String, String>{
+      'dest': destHash,
+      if (nickname.isNotEmpty) 'nick': nickname,
+      if (callsign.isNotEmpty) 'call': callsign,
+      if (neighborhoodZone.isNotEmpty) 'zone': neighborhoodZone,
+      if (bio.isNotEmpty) 'bio': bio,
+      if (contactInfo.isNotEmpty) 'contact': contactInfo,
+      if (avatarBase64.isNotEmpty) 'avatar': avatarBase64,
+      if (skills.isNotEmpty) 'skills': skills.join(','),
+      if (updatedAtSec > 0) 'ts': updatedAtSec.toString(),
+    };
+    final uri = Uri(
+      scheme: 'neighbornet',
+      host: 'contact',
+      queryParameters: queryParams,
+    );
+    return uri.toString();
+  }
+
+  /// Parses a tactical contact URI or JSON string into a UserProfile.
+  static UserProfile? fromContactUri(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return null;
+
+    // Check if JSON format
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        final map = jsonDecode(trimmed) as Map<String, dynamic>;
+        return UserProfile.fromJson(map);
+      } catch (_) {}
+    }
+
+    try {
+      final uri = Uri.parse(trimmed);
+      if (uri.scheme == 'neighbornet' && (uri.host == 'contact' || uri.path.contains('contact') || uri.host.isNotEmpty)) {
+        final q = uri.queryParameters;
+        final dest = q['dest'] ?? (uri.host != 'contact' ? uri.host : '');
+        if (dest.isEmpty) return null;
+
+        final skillsRaw = q['skills'] ?? '';
+        final skillsList = skillsRaw.isNotEmpty
+            ? skillsRaw.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList()
+            : <String>[];
+
+        return UserProfile(
+          destHash: dest,
+          nickname: q['nick'] ?? 'Neighbor',
+          callsign: q['call'] ?? '',
+          neighborhoodZone: q['zone'] ?? '',
+          bio: q['bio'] ?? '',
+          contactInfo: q['contact'] ?? '',
+          avatarBase64: q['avatar'] ?? '',
+          skills: skillsList,
+          updatedAtSec: int.tryParse(q['ts'] ?? '') ?? 0,
+        );
+      }
+    } catch (_) {}
+
+    return null;
+  }
 }
+
 
 
