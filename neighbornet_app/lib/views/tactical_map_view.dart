@@ -142,6 +142,7 @@ class _TacticalMapViewState extends State<TacticalMapView>
                       originLon: _originLon,
                       getColor: _getCategoryColor,
                       selectedMarker: _selectedMarker,
+                      selectedTrace: state.selectedTrace,
                     ),
                     child: Stack(
                       children: [
@@ -244,6 +245,33 @@ class _TacticalMapViewState extends State<TacticalMapView>
                     ],
                   ),
                 ),
+                if (state.selectedTrace != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A).withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF38BDF8), width: 1.5),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.alt_route, size: 16, color: Color(0xFF38BDF8)),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Route to ${state.selectedTrace!.targetNickname} (${state.selectedTrace!.hops.length} hops • ${state.selectedTrace!.totalRttMs ?? "--"}ms)',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => state.selectTrace(null),
+                          child: const Icon(Icons.close, size: 16, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -367,6 +395,21 @@ class _TacticalMapViewState extends State<TacticalMapView>
                             ),
                           ),
                           const Spacer(),
+                          TextButton.icon(
+                            icon: const Icon(Icons.alt_route, size: 16, color: Color(0xFF38BDF8)),
+                            label: const Text('Trace Route', style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12)),
+                            onPressed: () {
+                              final marker = _selectedMarker!;
+                              state.simulateTrace(marker.authorHash.isNotEmpty ? marker.authorHash : marker.id);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Tracing mesh route to ${marker.title}...'),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                          ),
+                          const SizedBox(width: 8),
                           TextButton.icon(
                             icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
                             label: const Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
@@ -600,6 +643,7 @@ class _TacticalGridPainter extends CustomPainter {
   final double originLon;
   final Color Function(String) getColor;
   final TacticalMarker? selectedMarker;
+  final TracerouteSession? selectedTrace;
 
   _TacticalGridPainter({
     required this.pulseValue,
@@ -610,6 +654,7 @@ class _TacticalGridPainter extends CustomPainter {
     required this.originLon,
     required this.getColor,
     required this.selectedMarker,
+    this.selectedTrace,
   });
 
   @override
@@ -660,6 +705,125 @@ class _TacticalGridPainter extends CustomPainter {
         ..strokeWidth = 3.0;
 
       canvas.drawCircle(pos, 20 + pulseValue * 60, pulsePaint);
+    }
+
+    // Traceroute Vector Hop Overlay
+    if (selectedTrace != null && selectedTrace!.hops.isNotEmpty) {
+      final hops = selectedTrace!.hops;
+      final List<Offset> hopPositions = [];
+
+      // Find or synthesize canvas coordinates for each hop
+      final targetMarker = markers.where((m) => m.authorHash == selectedTrace!.targetHash || m.id == selectedTrace!.targetHash).firstOrNull;
+      final targetPos = targetMarker != null
+          ? Offset(
+              1000.0 + (targetMarker.lon - originLon) * (11100.0 * cos(originLat * pi / 180)),
+              1000.0 - (targetMarker.lat - originLat) * 11100.0,
+            )
+          : const Offset(1350, 750);
+
+      for (int i = 0; i < hops.length; i++) {
+        if (i == 0) {
+          hopPositions.add(center);
+        } else if (i == hops.length - 1) {
+          hopPositions.add(targetPos);
+        } else {
+          final t = i / (hops.length - 1);
+          final intermediateMarker = markers.where((m) => m.authorHash == hops[i].nodeHash).firstOrNull;
+          if (intermediateMarker != null) {
+            hopPositions.add(Offset(
+              1000.0 + (intermediateMarker.lon - originLon) * (11100.0 * cos(originLat * pi / 180)),
+              1000.0 - (intermediateMarker.lat - originLat) * 11100.0,
+            ));
+          } else {
+            // Curvature offset for intermediate mesh relays
+            final base = Offset.lerp(center, targetPos, t)!;
+            final curveOffset = Offset(
+              sin(i * pi / 2) * 120,
+              cos(i * pi / 2) * -90,
+            );
+            hopPositions.add(base + curveOffset);
+          }
+        }
+      }
+
+      // Draw glowing vector path
+      final glowPaint = Paint()
+        ..color = const Color(0xFF38BDF8).withValues(alpha: 0.35)
+        ..strokeWidth = 8.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+
+      final pathPaint = Paint()
+        ..color = const Color(0xFF38BDF8)
+        ..strokeWidth = 2.5
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+
+      for (int i = 0; i < hopPositions.length - 1; i++) {
+        canvas.drawLine(hopPositions[i], hopPositions[i + 1], glowPaint);
+        canvas.drawLine(hopPositions[i], hopPositions[i + 1], pathPaint);
+      }
+
+      // Draw animated travelling signal packet
+      if (hopPositions.length > 1) {
+        final totalSegments = hopPositions.length - 1;
+        final currentProgress = pulseValue * totalSegments;
+        final segIndex = currentProgress.floor().clamp(0, totalSegments - 1);
+        final segT = currentProgress - segIndex;
+        final packetPos = Offset.lerp(hopPositions[segIndex], hopPositions[segIndex + 1], segT)!;
+
+        canvas.drawCircle(packetPos, 7, Paint()..color = Colors.white);
+        canvas.drawCircle(packetPos, 14, Paint()..color = const Color(0xFF38BDF8).withValues(alpha: 0.6));
+      }
+
+      // Draw hop markers & labels
+      for (int i = 0; i < hopPositions.length; i++) {
+        final pos = hopPositions[i];
+        final hop = hops[i];
+        final isFirst = i == 0;
+        final isLast = i == hopPositions.length - 1;
+
+        final nodeColor = isFirst
+            ? const Color(0xFF38BDF8)
+            : isLast
+                ? const Color(0xFF10B981)
+                : const Color(0xFFA855F7);
+
+        canvas.drawCircle(pos, 16, Paint()..color = const Color(0xFF0F172A));
+        canvas.drawCircle(
+          pos,
+          16,
+          Paint()
+            ..color = nodeColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.5,
+        );
+
+        // Hop number text
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: '$i',
+            style: TextStyle(color: nodeColor, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        textPainter.paint(canvas, pos - Offset(textPainter.width / 2, textPainter.height / 2));
+
+        // Hop Nickname label
+        final labelPainter = TextPainter(
+          text: TextSpan(
+            text: '${hop.nickname} (${hop.interfaceType})',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              backgroundColor: Color(0xCC000000),
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        labelPainter.paint(canvas, pos + const Offset(18, -6));
+      }
     }
 
     // Ruler Line

@@ -174,6 +174,128 @@ class TacticalMarker {
   }
 }
 
+class TraceHop {
+  final String nodeHash;
+  final String nickname;
+  final String callsign;
+  final String interfaceType; // "UDP/LAN", "LoRa-915MHz", "BLE-Mesh", "Local Host"
+  final int? rssiDbm;
+  final double? snrDb;
+  final int timestampMs;
+  final int deltaMs;
+
+  TraceHop({
+    required this.nodeHash,
+    required this.nickname,
+    required this.callsign,
+    required this.interfaceType,
+    this.rssiDbm,
+    this.snrDb,
+    required this.timestampMs,
+    required this.deltaMs,
+  });
+
+  factory TraceHop.fromJson(Map<String, dynamic> json) {
+    return TraceHop(
+      nodeHash: json['node_hash'] ?? '',
+      nickname: json['nickname'] ?? 'Unknown Node',
+      callsign: json['callsign'] ?? '',
+      interfaceType: json['interface_type'] ?? 'UDP/LAN',
+      rssiDbm: json['rssi_dbm'],
+      snrDb: (json['snr_db'] as num?)?.toDouble(),
+      timestampMs: json['timestamp_ms'] ?? 0,
+      deltaMs: json['delta_ms'] ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'node_hash': nodeHash,
+      'nickname': nickname,
+      'callsign': callsign,
+      'interface_type': interfaceType,
+      if (rssiDbm != null) 'rssi_dbm': rssiDbm,
+      if (snrDb != null) 'snr_db': snrDb,
+      'timestamp_ms': timestampMs,
+      'delta_ms': deltaMs,
+    };
+  }
+}
+
+class TracerouteSession {
+  final String traceId;
+  final String originHash;
+  final String originNickname;
+  final String originCallsign;
+  final String targetHash;
+  final String targetNickname;
+  final int ttl;
+  final int maxTtl;
+  final List<TraceHop> hops;
+  final String status; // "in_transit", "reached_destination", "ttl_expired", "timeout"
+  final int createdAtMs;
+  final int? completedAtMs;
+  final int? totalRttMs;
+
+  TracerouteSession({
+    required this.traceId,
+    required this.originHash,
+    required this.originNickname,
+    required this.originCallsign,
+    required this.targetHash,
+    required this.targetNickname,
+    required this.ttl,
+    required this.maxTtl,
+    required this.hops,
+    required this.status,
+    required this.createdAtMs,
+    this.completedAtMs,
+    this.totalRttMs,
+  });
+
+  bool get isCompleted => status == 'reached_destination' || status == 'ttl_expired' || status == 'timeout';
+  bool get isSuccess => status == 'reached_destination';
+
+  factory TracerouteSession.fromJson(Map<String, dynamic> json) {
+    var rawHops = json['hops'] as List? ?? [];
+    List<TraceHop> hopsList = rawHops.map((h) => TraceHop.fromJson(h as Map<String, dynamic>)).toList();
+
+    return TracerouteSession(
+      traceId: json['trace_id'] ?? '',
+      originHash: json['origin_hash'] ?? '',
+      originNickname: json['origin_nickname'] ?? 'Origin',
+      originCallsign: json['origin_callsign'] ?? '',
+      targetHash: json['target_hash'] ?? '',
+      targetNickname: json['target_nickname'] ?? 'Target',
+      ttl: json['ttl'] ?? 0,
+      maxTtl: json['max_ttl'] ?? 8,
+      hops: hopsList,
+      status: json['status'] ?? 'in_transit',
+      createdAtMs: json['created_at_ms'] ?? 0,
+      completedAtMs: json['completed_at_ms'],
+      totalRttMs: json['total_rtt_ms'],
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'trace_id': traceId,
+      'origin_hash': originHash,
+      'origin_nickname': originNickname,
+      'origin_callsign': originCallsign,
+      'target_hash': targetHash,
+      'target_nickname': targetNickname,
+      'ttl': ttl,
+      'max_ttl': maxTtl,
+      'hops': hops.map((h) => h.toJson()).toList(),
+      'status': status,
+      'created_at_ms': createdAtMs,
+      if (completedAtMs != null) 'completed_at_ms': completedAtMs,
+      if (totalRttMs != null) 'total_rtt_ms': totalRttMs,
+    };
+  }
+}
+
 class BulletinPost {
   final String id;
   final String title;

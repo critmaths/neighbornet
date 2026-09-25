@@ -36,6 +36,9 @@ class NeighborNetState extends ChangeNotifier {
   UserProfile? _myProfile;
   final Map<String, UserProfile> _peerProfiles = {};
   List<TacticalMarker> _markers = [];
+  List<TracerouteSession> _traceroutes = [];
+  TracerouteSession? _selectedTrace;
+  bool _isTracing = false;
 
   String _currentChannel = 'general';
   String? _errorMessage;
@@ -55,6 +58,9 @@ class NeighborNetState extends ChangeNotifier {
   UserProfile? get myProfile => _myProfile;
   Map<String, UserProfile> get peerProfiles => _peerProfiles;
   List<TacticalMarker> get markers => _markers;
+  List<TracerouteSession> get traceroutes => _traceroutes;
+  TracerouteSession? get selectedTrace => _selectedTrace;
+  bool get isTracing => _isTracing;
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -269,6 +275,8 @@ class NeighborNetState extends ChangeNotifier {
       _formEntries.clear();
       _peerProfiles.clear();
       _markers.clear();
+      _traceroutes.clear();
+      _selectedTrace = null;
       _myProfile = null;
       _currentChannel = 'general';
       _refreshState();
@@ -286,6 +294,13 @@ class NeighborNetState extends ChangeNotifier {
     _sharedFiles = _bridge.getSharedFiles();
     _rooms = _bridge.getRooms();
     _markers = _bridge.getMarkers();
+    _traceroutes = _bridge.getTraceroutes();
+    if (_selectedTrace != null) {
+      final updated = _traceroutes.where((t) => t.traceId == _selectedTrace!.traceId).firstOrNull;
+      if (updated != null) {
+        _selectedTrace = updated;
+      }
+    }
     _formSchemas = _bridge.getFormSchemas();
     for (final s in _formSchemas) {
       _formEntries[s.id] = _bridge.getFormEntries(s.id);
@@ -750,6 +765,56 @@ class NeighborNetState extends ChangeNotifier {
     }
     notifyListeners();
     return true;
+  }
+
+  // --- TRACEROUTE & MESH ROUTE DISCOVERY ---
+
+  void selectTrace(TracerouteSession? trace) {
+    _selectedTrace = trace;
+    notifyListeners();
+  }
+
+  Future<TracerouteSession?> initiateTraceroute(String targetHash, {int maxTtl = 8}) async {
+    _isTracing = true;
+    notifyListeners();
+    try {
+      final trace = _bridge.initiateTraceroute(targetHash, maxTtl: maxTtl);
+      if (trace != null) {
+        _traceroutes = _bridge.getTraceroutes();
+        _selectedTrace = trace;
+      }
+      return trace;
+    } finally {
+      _isTracing = false;
+      notifyListeners();
+    }
+  }
+
+  Future<TracerouteSession?> simulateTrace(String targetHash) async {
+    _isTracing = true;
+    notifyListeners();
+    try {
+      final trace = _bridge.simulateTrace(targetHash);
+      if (trace != null) {
+        _traceroutes = _bridge.getTraceroutes();
+        _selectedTrace = trace;
+      }
+      return trace;
+    } finally {
+      _isTracing = false;
+      notifyListeners();
+    }
+  }
+
+  void refreshTraceroutes() {
+    _traceroutes = _bridge.getTraceroutes();
+    if (_selectedTrace != null) {
+      final updated = _traceroutes.where((t) => t.traceId == _selectedTrace!.traceId).firstOrNull;
+      if (updated != null) {
+        _selectedTrace = updated;
+      }
+    }
+    notifyListeners();
   }
 
   @override

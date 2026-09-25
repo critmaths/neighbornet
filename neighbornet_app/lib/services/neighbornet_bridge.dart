@@ -100,6 +100,15 @@ typedef _DartSendVoiceChat = bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer
 typedef _NativeDeleteMarker = Bool Function(Pointer<Utf8>);
 typedef _DartDeleteMarker = bool Function(Pointer<Utf8>);
 
+typedef _NativeInitiateTraceroute = Pointer<Utf8> Function(Pointer<Utf8>, Uint8);
+typedef _DartInitiateTraceroute = Pointer<Utf8> Function(Pointer<Utf8>, int);
+
+typedef _NativeGetTracerouteById = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DartGetTracerouteById = Pointer<Utf8> Function(Pointer<Utf8>);
+
+typedef _NativeSimulateTrace = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DartSimulateTrace = Pointer<Utf8> Function(Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -158,6 +167,11 @@ class NeighborNetBridge {
   late _DartGetJson _getMarkersJson;
   late _DartGetRoomData _upsertMarker;
   late _DartDeleteMarker _deleteMarker;
+
+  late _DartInitiateTraceroute _initiateTraceroute;
+  late _DartGetJson _getTraceroutesJson;
+  late _DartGetTracerouteById _getTracerouteById;
+  late _DartSimulateTrace _simulateTrace;
 
   bool get isReady => _isInitialized;
 
@@ -236,6 +250,11 @@ class NeighborNetBridge {
     _getMarkersJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_markers_json');
     _upsertMarker = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_upsert_marker');
     _deleteMarker = _dylib!.lookupFunction<_NativeDeleteMarker, _DartDeleteMarker>('neighbornet_delete_marker');
+
+    _initiateTraceroute = _dylib!.lookupFunction<_NativeInitiateTraceroute, _DartInitiateTraceroute>('neighbornet_initiate_traceroute');
+    _getTraceroutesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_traceroutes_json');
+    _getTracerouteById = _dylib!.lookupFunction<_NativeGetTracerouteById, _DartGetTracerouteById>('neighbornet_get_traceroute_by_id_json');
+    _simulateTrace = _dylib!.lookupFunction<_NativeSimulateTrace, _DartSimulateTrace>('neighbornet_simulate_trace');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -888,6 +907,84 @@ class NeighborNetBridge {
       return false;
     } finally {
       calloc.free(idPtr);
+    }
+  }
+
+  TracerouteSession? initiateTraceroute(String targetHash, {int maxTtl = 8}) {
+    if (!_isInitialized) return null;
+    final hashPtr = targetHash.toNativeUtf8();
+    try {
+      final ptr = _initiateTraceroute(hashPtr, maxTtl);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return TracerouteSession.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(hashPtr);
+    }
+  }
+
+  List<TracerouteSession> getTraceroutes() {
+    if (!_isInitialized) return [];
+    final ptr = _getTraceroutesJson();
+    if (ptr == nullptr) return [];
+    try {
+      final jsonStr = ptr.toDartString();
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((item) => TracerouteSession.fromJson(item as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    } finally {
+      _freeString(ptr);
+    }
+  }
+
+  TracerouteSession? getTracerouteById(String traceId) {
+    if (!_isInitialized) return null;
+    final idPtr = traceId.toNativeUtf8();
+    try {
+      final ptr = _getTracerouteById(idPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        if (jsonStr == 'null' || jsonStr.isEmpty) return null;
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return TracerouteSession.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(idPtr);
+    }
+  }
+
+  TracerouteSession? simulateTrace(String targetHash) {
+    if (!_isInitialized) return null;
+    final hashPtr = targetHash.toNativeUtf8();
+    try {
+      final ptr = _simulateTrace(hashPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return TracerouteSession.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(hashPtr);
     }
   }
 }

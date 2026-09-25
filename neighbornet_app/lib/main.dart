@@ -11,6 +11,7 @@ import 'views/voice_chat_view.dart';
 import 'views/forms_view.dart';
 import 'views/ptt_walkie_talkie_view.dart';
 import 'views/tactical_map_view.dart';
+import 'views/traceroute_view.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
@@ -188,6 +189,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Tactical Map'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.alt_route),
+                    selectedIcon: Icon(Icons.alt_route, color: Color(0xFF38BDF8)),
+                    label: Text('Mesh Traceroute'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.people_outline),
                     selectedIcon: Icon(Icons.people),
                     label: Text('People & Nodes'),
@@ -244,16 +250,18 @@ class _MainShellState extends State<MainShell> {
       case 3:
         return const TacticalMapView();
       case 4:
-        return PeopleView(state: widget.state);
+        return TracerouteView(onSwitchToMap: () => setState(() => _selectedIndex = 3));
       case 5:
-        return const VoiceChatView();
+        return PeopleView(state: widget.state);
       case 6:
-        return PttWalkieTalkieView(state: widget.state);
+        return const VoiceChatView();
       case 7:
-        return SurvivalManualView(state: widget.state);
+        return PttWalkieTalkieView(state: widget.state);
       case 8:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 9:
+        return EmergencyView(state: widget.state);
+      case 10:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

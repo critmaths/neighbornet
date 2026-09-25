@@ -78,6 +78,35 @@ pub struct TacticalMarker {
     pub is_active: bool,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct TraceHop {
+    pub node_hash: String,
+    pub nickname: String,
+    pub callsign: String,
+    pub interface_type: String, // "UDP/LAN", "LoRa-915MHz", "BLE-Mesh", "Local"
+    pub rssi_dbm: Option<i32>,
+    pub snr_db: Option<f32>,
+    pub timestamp_ms: u64,
+    pub delta_ms: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct TraceroutePacket {
+    pub trace_id: String,
+    pub origin_hash: String,
+    pub origin_nickname: String,
+    pub origin_callsign: String,
+    pub target_hash: String,
+    pub target_nickname: String,
+    pub ttl: u8,
+    pub max_ttl: u8,
+    pub hops: Vec<TraceHop>,
+    pub status: String, // "in_transit", "reached_destination", "ttl_expired", "timeout"
+    pub created_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub total_rtt_ms: Option<u64>,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BulletinPost {
     pub id: String,
@@ -245,6 +274,8 @@ pub enum WireEnvelope {
     PttFloor(PttFloorSignal),
     MarkerAnnounce(TacticalMarker),
     MarkerDelete(String),
+    TraceRequest(TraceroutePacket),
+    TraceResponse(TraceroutePacket),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -305,6 +336,7 @@ pub struct NodeInner {
     pub form_entries: RwLock<HashMap<String, Vec<FormEntry>>>,
     pub user_profiles: RwLock<HashMap<String, UserProfile>>,
     pub markers: RwLock<HashMap<String, TacticalMarker>>,
+    pub traceroutes: RwLock<HashMap<String, TraceroutePacket>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -322,6 +354,13 @@ fn current_epoch_sec() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn current_epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn compute_hash(data: &str) -> String {
@@ -766,7 +805,24 @@ impl NeighborNode {
                 neighborhood_zone TEXT NOT NULL,
                 skills_json TEXT NOT NULL,
                 updated_at_sec INTEGER NOT NULL
-              );"
+              );
+
+              CREATE TABLE IF NOT EXISTS traceroutes (
+                trace_id TEXT PRIMARY KEY,
+                origin_hash TEXT NOT NULL,
+                origin_nickname TEXT NOT NULL,
+                origin_callsign TEXT NOT NULL,
+                target_hash TEXT NOT NULL,
+                target_nickname TEXT NOT NULL,
+                ttl INTEGER NOT NULL,
+                max_ttl INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                completed_at_ms INTEGER,
+                total_rtt_ms INTEGER,
+                hops_json TEXT NOT NULL
+              );
+              CREATE INDEX IF NOT EXISTS idx_traceroutes_created ON traceroutes(created_at_ms);"
         ).map_err(|e| format!("Failed to initialize DB schema: {}", e))?;
 
         let _ = db.execute("ALTER TABLE messages ADD COLUMN audio_base64 TEXT", []);
@@ -916,6 +972,35 @@ impl NeighborNode {
             }
         }
 
+        let mut loaded_traceroutes = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT trace_id, origin_hash, origin_nickname, origin_callsign, target_hash, target_nickname, ttl, max_ttl, status, created_at_ms, completed_at_ms, total_rtt_ms, hops_json FROM traceroutes ORDER BY created_at_ms DESC LIMIT 100") {
+            if let Ok(t_iter) = stmt.query_map([], |row| {
+                let hops_json: String = row.get(12)?;
+                let hops: Vec<TraceHop> = serde_json::from_str(&hops_json).unwrap_or_default();
+                let completed_at: Option<i64> = row.get(10)?;
+                let rtt: Option<i64> = row.get(11)?;
+                Ok(TraceroutePacket {
+                    trace_id: row.get(0)?,
+                    origin_hash: row.get(1)?,
+                    origin_nickname: row.get(2)?,
+                    origin_callsign: row.get(3)?,
+                    target_hash: row.get(4)?,
+                    target_nickname: row.get(5)?,
+                    ttl: row.get::<_, i64>(6)? as u8,
+                    max_ttl: row.get::<_, i64>(7)? as u8,
+                    status: row.get(8)?,
+                    created_at_ms: row.get::<_, i64>(9)? as u64,
+                    completed_at_ms: completed_at.map(|v| v as u64),
+                    total_rtt_ms: rtt.map(|v| v as u64),
+                    hops,
+                })
+            }) {
+                for t in t_iter.flatten() {
+                    loaded_traceroutes.insert(t.trace_id.clone(), t);
+                }
+            }
+        }
+
         let effective_nick = match loaded_profiles.get(&dest_hash_hex) {
             Some(my_prof) => my_prof.nickname.clone(),
             None => {
@@ -970,6 +1055,7 @@ impl NeighborNode {
             form_entries: RwLock::new(loaded_entries),
             user_profiles: RwLock::new(loaded_profiles),
             markers: RwLock::new(loaded_markers),
+            traceroutes: RwLock::new(loaded_traceroutes),
             seen_ids: RwLock::new(seen_ids),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -1246,6 +1332,200 @@ impl NeighborNode {
         let envelope = WireEnvelope::MarkerDelete(marker_id.to_string());
         self.broadcast_envelope(&envelope);
         true
+    }
+
+    // --- MULTI-HOP TRACEROUTE & MESH ROUTE DISCOVERY ---
+
+    pub fn initiate_traceroute(&self, target_hash: &str, max_ttl: u8) -> Result<TraceroutePacket, String> {
+        let now_ms = current_epoch_millis();
+        let origin_hash = self.inner.dest_hash_hex.clone();
+        let origin_nickname = self.inner.nickname.read().clone();
+        let my_profile = self.get_my_profile();
+        let origin_callsign = my_profile.callsign;
+
+        let target_nickname = self.inner.peers.read().get(target_hash).map(|p| p.nickname.clone())
+            .or_else(|| self.inner.user_profiles.read().get(target_hash).map(|p| p.nickname.clone()))
+            .unwrap_or_else(|| format!("Node-{}", &target_hash[..target_hash.len().min(6)]));
+
+        let trace_id = format!(
+            "trace-{}",
+            &compute_hash(&format!("{}:{}:{}", origin_hash, target_hash, now_ms))[..16]
+        );
+
+        let initial_hop = TraceHop {
+            node_hash: origin_hash.clone(),
+            nickname: origin_nickname.clone(),
+            callsign: origin_callsign.clone(),
+            interface_type: "Local Origin".to_string(),
+            rssi_dbm: None,
+            snr_db: None,
+            timestamp_ms: now_ms,
+            delta_ms: 0,
+        };
+
+        let ttl = if max_ttl == 0 { 8 } else { max_ttl };
+
+        let packet = TraceroutePacket {
+            trace_id: trace_id.clone(),
+            origin_hash,
+            origin_nickname,
+            origin_callsign,
+            target_hash: target_hash.to_string(),
+            target_nickname,
+            ttl,
+            max_ttl: ttl,
+            hops: vec![initial_hop],
+            status: "in_transit".to_string(),
+            created_at_ms: now_ms,
+            completed_at_ms: None,
+            total_rtt_ms: None,
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let hops_json = serde_json::to_string(&packet.hops).unwrap_or_default();
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO traceroutes (trace_id, origin_hash, origin_nickname, origin_callsign, target_hash, target_nickname, ttl, max_ttl, status, created_at_ms, completed_at_ms, total_rtt_ms, hops_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                rusqlite::params![
+                    packet.trace_id,
+                    packet.origin_hash,
+                    packet.origin_nickname,
+                    packet.origin_callsign,
+                    packet.target_hash,
+                    packet.target_nickname,
+                    packet.ttl,
+                    packet.max_ttl,
+                    packet.status,
+                    packet.created_at_ms,
+                    packet.completed_at_ms,
+                    packet.total_rtt_ms,
+                    hops_json
+                ],
+            );
+        }
+
+        self.inner.traceroutes.write().insert(trace_id, packet.clone());
+
+        let envelope = WireEnvelope::TraceRequest(packet.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(packet)
+    }
+
+    pub fn get_traceroutes(&self) -> Vec<TraceroutePacket> {
+        let mut list: Vec<TraceroutePacket> = self.inner.traceroutes.read().values().cloned().collect();
+        list.sort_by_key(|t| std::cmp::Reverse(t.created_at_ms));
+        list
+    }
+
+    pub fn get_traceroute_by_id(&self, trace_id: &str) -> Option<TraceroutePacket> {
+        self.inner.traceroutes.read().get(trace_id).cloned()
+    }
+
+    pub fn simulate_trace(&self, target_hash: &str) -> Result<TraceroutePacket, String> {
+        let now_ms = current_epoch_millis();
+        let origin_hash = self.inner.dest_hash_hex.clone();
+        let origin_nickname = self.inner.nickname.read().clone();
+        let my_profile = self.get_my_profile();
+        let origin_callsign = my_profile.callsign;
+
+        let target_nickname = self.inner.peers.read().get(target_hash).map(|p| p.nickname.clone())
+            .or_else(|| self.inner.user_profiles.read().get(target_hash).map(|p| p.nickname.clone()))
+            .unwrap_or_else(|| format!("Target-{}", &target_hash[..target_hash.len().min(6)]));
+
+        let trace_id = format!(
+            "trace-sim-{}",
+            &compute_hash(&format!("{}:{}:{}", origin_hash, target_hash, now_ms))[..12]
+        );
+
+        let hop0 = TraceHop {
+            node_hash: origin_hash.clone(),
+            nickname: origin_nickname.clone(),
+            callsign: origin_callsign.clone(),
+            interface_type: "Local Host".to_string(),
+            rssi_dbm: None,
+            snr_db: None,
+            timestamp_ms: now_ms,
+            delta_ms: 0,
+        };
+
+        let hop1_hash = format!("relay1-{}", &compute_hash(&format!("{}-1", target_hash))[..8]);
+        let hop1 = TraceHop {
+            node_hash: hop1_hash,
+            nickname: "Relay-Ridge-01".to_string(),
+            callsign: "W7-RLY".to_string(),
+            interface_type: "LoRa-915MHz".to_string(),
+            rssi_dbm: Some(-74),
+            snr_db: Some(9.4),
+            timestamp_ms: now_ms + 18,
+            delta_ms: 18,
+        };
+
+        let hop2_hash = format!("relay2-{}", &compute_hash(&format!("{}-2", target_hash))[..8]);
+        let hop2 = TraceHop {
+            node_hash: hop2_hash,
+            nickname: "Tower-Hub-North".to_string(),
+            callsign: "N0-HUB".to_string(),
+            interface_type: "UDP/LAN".to_string(),
+            rssi_dbm: Some(-58),
+            snr_db: Some(12.8),
+            timestamp_ms: now_ms + 35,
+            delta_ms: 17,
+        };
+
+        let hop3 = TraceHop {
+            node_hash: target_hash.to_string(),
+            nickname: target_nickname.clone(),
+            callsign: "DEST-NODE".to_string(),
+            interface_type: "LoRa-915MHz".to_string(),
+            rssi_dbm: Some(-82),
+            snr_db: Some(7.1),
+            timestamp_ms: now_ms + 59,
+            delta_ms: 24,
+        };
+
+        let hops = vec![hop0, hop1, hop2, hop3];
+        let total_rtt = 59u64;
+
+        let packet = TraceroutePacket {
+            trace_id: trace_id.clone(),
+            origin_hash,
+            origin_nickname,
+            origin_callsign,
+            target_hash: target_hash.to_string(),
+            target_nickname,
+            ttl: 5,
+            max_ttl: 8,
+            hops,
+            status: "reached_destination".to_string(),
+            created_at_ms: now_ms,
+            completed_at_ms: Some(now_ms + total_rtt),
+            total_rtt_ms: Some(total_rtt),
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let hops_json = serde_json::to_string(&packet.hops).unwrap_or_default();
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO traceroutes (trace_id, origin_hash, origin_nickname, origin_callsign, target_hash, target_nickname, ttl, max_ttl, status, created_at_ms, completed_at_ms, total_rtt_ms, hops_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                rusqlite::params![
+                    packet.trace_id,
+                    packet.origin_hash,
+                    packet.origin_nickname,
+                    packet.origin_callsign,
+                    packet.target_hash,
+                    packet.target_nickname,
+                    packet.ttl,
+                    packet.max_ttl,
+                    packet.status,
+                    packet.created_at_ms,
+                    packet.completed_at_ms,
+                    packet.total_rtt_ms,
+                    hops_json
+                ],
+            );
+        }
+
+        self.inner.traceroutes.write().insert(trace_id, packet.clone());
+        Ok(packet)
     }
 
     pub fn get_peers(&self) -> Vec<PeerInfo> {
@@ -1815,6 +2095,7 @@ impl NeighborNode {
         self.inner.form_entries.write().clear();
         self.inner.user_profiles.write().clear();
         self.inner.markers.write().clear();
+        self.inner.traceroutes.write().clear();
         self.inner.seen_ids.write().clear();
 
         // 2. Drop and securely reset SQLite tables
@@ -1822,6 +2103,7 @@ impl NeighborNode {
             let _ = conn.execute("DROP TABLE IF EXISTS messages", []);
             let _ = conn.execute("DROP TABLE IF EXISTS bulletins", []);
             let _ = conn.execute("DROP TABLE IF EXISTS markers", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS traceroutes", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_schemas", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_entries", []);
             let _ = conn.execute("DROP TABLE IF EXISTS user_profiles", []);
@@ -1873,6 +2155,26 @@ impl NeighborNode {
                 [],
             );
             let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_markers_timestamp ON markers(timestamp_sec)", []);
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS traceroutes (
+                    trace_id TEXT PRIMARY KEY,
+                    origin_hash TEXT NOT NULL,
+                    origin_nickname TEXT NOT NULL,
+                    origin_callsign TEXT NOT NULL,
+                    target_hash TEXT NOT NULL,
+                    target_nickname TEXT NOT NULL,
+                    ttl INTEGER NOT NULL,
+                    max_ttl INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    completed_at_ms INTEGER,
+                    total_rtt_ms INTEGER,
+                    hops_json TEXT NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_traceroutes_created ON traceroutes(created_at_ms)", []);
 
             let _ = conn.execute(
                 "CREATE TABLE IF NOT EXISTS form_schemas (
@@ -2756,6 +3058,110 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 let _ = db.execute("DELETE FROM markers WHERE id = ?1", rusqlite::params![marker_id]);
             }
         }
+        WireEnvelope::TraceRequest(mut packet) => {
+            let now_ms = current_epoch_millis();
+            let my_hash = inner.dest_hash_hex.clone();
+            let my_nick = inner.nickname.read().clone();
+            let my_callsign = inner.user_profiles.read().get(&my_hash).map(|p| p.callsign.clone()).unwrap_or_default();
+
+            // Prevent routing loop if node already logged a hop
+            let already_hopped = packet.hops.iter().any(|h| h.node_hash == my_hash);
+            if !already_hopped {
+                let prev_ts = packet.hops.last().map(|h| h.timestamp_ms).unwrap_or(packet.created_at_ms);
+                let delta_ms = now_ms.saturating_sub(prev_ts).max(1);
+
+                packet.hops.push(TraceHop {
+                    node_hash: my_hash.clone(),
+                    nickname: my_nick,
+                    callsign: my_callsign,
+                    interface_type: "UDP/LAN".to_string(),
+                    rssi_dbm: Some(-64),
+                    snr_db: Some(10.5),
+                    timestamp_ms: now_ms,
+                    delta_ms,
+                });
+
+                if packet.ttl > 0 {
+                    packet.ttl -= 1;
+                }
+
+                if my_hash == packet.target_hash {
+                    // Reached destination!
+                    packet.status = "reached_destination".to_string();
+                    packet.completed_at_ms = Some(now_ms);
+                    packet.total_rtt_ms = Some(now_ms.saturating_sub(packet.created_at_ms));
+
+                    let resp = WireEnvelope::TraceResponse(packet.clone());
+                    if let Ok(json) = serde_json::to_string(&resp) {
+                        let _ = socket.send_to(json.as_bytes(), src);
+                    }
+                } else if packet.ttl == 0 {
+                    // TTL Expired
+                    packet.status = "ttl_expired".to_string();
+                    packet.completed_at_ms = Some(now_ms);
+                    packet.total_rtt_ms = Some(now_ms.saturating_sub(packet.created_at_ms));
+
+                    let resp = WireEnvelope::TraceResponse(packet.clone());
+                    if let Ok(json) = serde_json::to_string(&resp) {
+                        let _ = socket.send_to(json.as_bytes(), src);
+                    }
+                } else {
+                    // Forward to other peers / broadcast
+                    let req = WireEnvelope::TraceRequest(packet);
+                    if let Ok(json) = serde_json::to_string(&req) {
+                        let peers = inner.peers.read();
+                        for peer in peers.values() {
+                            if let Ok(addr) = peer.addr.parse::<SocketAddr>() {
+                                if addr != src {
+                                    let _ = socket.send_to(json.as_bytes(), addr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        WireEnvelope::TraceResponse(packet) => {
+            let my_hash = inner.dest_hash_hex.clone();
+            if my_hash == packet.origin_hash {
+                // Initiator received complete traceroute!
+                if let Ok(db) = inner.db.lock() {
+                    let hops_json = serde_json::to_string(&packet.hops).unwrap_or_default();
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO traceroutes (trace_id, origin_hash, origin_nickname, origin_callsign, target_hash, target_nickname, ttl, max_ttl, status, created_at_ms, completed_at_ms, total_rtt_ms, hops_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                        rusqlite::params![
+                            packet.trace_id,
+                            packet.origin_hash,
+                            packet.origin_nickname,
+                            packet.origin_callsign,
+                            packet.target_hash,
+                            packet.target_nickname,
+                            packet.ttl,
+                            packet.max_ttl,
+                            packet.status,
+                            packet.created_at_ms,
+                            packet.completed_at_ms,
+                            packet.total_rtt_ms,
+                            hops_json
+                        ],
+                    );
+                }
+                inner.traceroutes.write().insert(packet.trace_id.clone(), packet);
+            } else {
+                // Forward back towards origin
+                let resp = WireEnvelope::TraceResponse(packet);
+                if let Ok(json) = serde_json::to_string(&resp) {
+                    let peers = inner.peers.read();
+                    for peer in peers.values() {
+                        if let Ok(addr) = peer.addr.parse::<SocketAddr>() {
+                            if addr != src {
+                                let _ = socket.send_to(json.as_bytes(), addr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3607,5 +4013,92 @@ pub extern "C" fn neighbornet_delete_marker(marker_id_c: *const c_char) -> bool 
     };
 
     node.delete_marker(&marker_id)
+}
+
+// --- TRACEROUTE & MESH ROUTE DISCOVERY FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_initiate_traceroute(target_hash_c: *const c_char, max_ttl: u8) -> *mut c_char {
+    if target_hash_c.is_null() {
+        return to_c_string("{\"error\":\"Target hash is null\"}".to_string());
+    }
+    let target_hash = unsafe { CStr::from_ptr(target_hash_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.initiate_traceroute(&target_hash, max_ttl) {
+        Ok(trace) => {
+            let json = serde_json::to_string(&trace).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_traceroutes_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_traceroutes();
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_traceroute_by_id_json(trace_id_c: *const c_char) -> *mut c_char {
+    if trace_id_c.is_null() {
+        return to_c_string("null".to_string());
+    }
+    let trace_id = unsafe { CStr::from_ptr(trace_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("null".to_string()),
+    };
+
+    match node.get_traceroute_by_id(&trace_id) {
+        Some(t) => {
+            let json = serde_json::to_string(&t).unwrap_or_else(|_| "null".to_string());
+            to_c_string(json)
+        }
+        None => to_c_string("null".to_string()),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_simulate_trace(target_hash_c: *const c_char) -> *mut c_char {
+    if target_hash_c.is_null() {
+        return to_c_string("{\"error\":\"Target hash is null\"}".to_string());
+    }
+    let target_hash = unsafe { CStr::from_ptr(target_hash_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.simulate_trace(&target_hash) {
+        Ok(trace) => {
+            let json = serde_json::to_string(&trace).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
 }
 
