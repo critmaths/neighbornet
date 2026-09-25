@@ -6,10 +6,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/neighbornet_models.dart';
 import '../services/neighbornet_bridge.dart';
 import '../services/notification_service.dart';
+import '../services/ptt_service.dart';
 import '../services/voice_chat_service.dart';
 
 class NeighborNetState extends ChangeNotifier {
   final NeighborNetBridge _bridge = NeighborNetBridge();
+  late final PttService _pttService = PttService(bridge: _bridge);
   Timer? _pollTimer;
   VoiceChatService? _voiceChatService;
 
@@ -57,6 +59,7 @@ class NeighborNetState extends ChangeNotifier {
   List<SerialDeviceInfo> get serialPorts => _serialPorts;
   LoraRadioStatus? get loraStatus => _loraStatus;
   bool get isLoraScanning => _isLoraScanning;
+  PttService get pttService => _pttService;
 
 
   List<ChatMessage> get currentMessages => getDisplayMessages(_currentChannel);
@@ -706,6 +709,7 @@ class NeighborNetState extends ChangeNotifier {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _pttService.dispose();
     _bridge.stopNode();
     super.dispose();
   }

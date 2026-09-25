@@ -22,6 +22,7 @@ void main() {
     expect(find.text('Community Forms'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
     expect(find.text('Voice Chat'), findsOneWidget);
+    expect(find.text('Walkie-Talkie (PTT)'), findsOneWidget);
     expect(find.text('Emergency Mode'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
 
@@ -39,6 +40,12 @@ void main() {
     await tester.tap(find.text('People & Nodes'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('People & Nodes'), findsNWidgets(2)); // Rail label + view header
+
+    // Switch to Walkie-Talkie (PTT)
+    await tester.tap(find.text('Walkie-Talkie (PTT)'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Tactical Walkie-Talkie (PTT)'), findsOneWidget);
+    expect(find.text('SIMPLEX HALF-DUPLEX'), findsOneWidget);
 
     // Switch to Emergency Mode
     await tester.tap(find.text('Emergency Mode'));

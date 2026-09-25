@@ -218,6 +218,33 @@ pub enum WireEnvelope {
     ProfileRequest {
         dest_hash: String,
     },
+    PttVoice(PttVoiceChunk),
+    PttFloor(PttFloorSignal),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PttVoiceChunk {
+    pub session_id: String,
+    pub sequence: u32,
+    pub channel: String,
+    pub sender_hash: String,
+    pub sender_nickname: String,
+    pub sender_callsign: String,
+    pub audio_base64: String,
+    pub is_final: bool,
+    pub priority: String,
+    pub timestamp_sec: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PttFloorSignal {
+    pub channel: String,
+    pub speaker_hash: String,
+    pub speaker_nickname: String,
+    pub speaker_callsign: String,
+    pub is_transmitting: bool,
+    pub priority: String,
+    pub timestamp_sec: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1106,7 +1133,13 @@ impl NeighborNode {
         }
     }
 
+    pub fn send_ptt_chunk(&self, chunk: PttVoiceChunk) {
+        self.broadcast_envelope(&WireEnvelope::PttVoice(chunk));
+    }
 
+    pub fn send_ptt_floor(&self, signal: PttFloorSignal) {
+        self.broadcast_envelope(&WireEnvelope::PttFloor(signal));
+    }
 
     // --- SOVEREIGN PROFILES & TACTICAL IDENTITY ---
 
@@ -2471,6 +2504,12 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 events.push(event);
             }
         }
+        WireEnvelope::PttVoice(_chunk) => {
+            // PTT voice chunks are broadcast live across the mesh
+        }
+        WireEnvelope::PttFloor(_signal) => {
+            // PTT floor signals are processed by clients
+        }
     }
 }
 
@@ -3148,4 +3187,88 @@ pub extern "C" fn neighbornet_get_all_profiles_json() -> *mut c_char {
     let list = node.get_all_profiles();
     let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
     to_c_string(json)
+}
+
+// --- PUSH-TO-TALK (PTT) TACTICAL WALKIE-TALKIE FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_send_ptt_chunk(
+    session_id_c: *const c_char,
+    sequence: u32,
+    channel_c: *const c_char,
+    audio_base64_c: *const c_char,
+    is_final: bool,
+    priority_c: *const c_char,
+) -> bool {
+    if session_id_c.is_null() || channel_c.is_null() || audio_base64_c.is_null() {
+        return false;
+    }
+    let session_id = unsafe { CStr::from_ptr(session_id_c).to_string_lossy().into_owned() };
+    let channel = unsafe { CStr::from_ptr(channel_c).to_string_lossy().into_owned() };
+    let audio_base64 = unsafe { CStr::from_ptr(audio_base64_c).to_string_lossy().into_owned() };
+    let priority = if priority_c.is_null() {
+        "normal".to_string()
+    } else {
+        unsafe { CStr::from_ptr(priority_c).to_string_lossy().into_owned() }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    let profile = node.get_my_profile();
+    let chunk = PttVoiceChunk {
+        session_id,
+        sequence,
+        channel,
+        sender_hash: profile.dest_hash,
+        sender_nickname: profile.nickname,
+        sender_callsign: profile.callsign,
+        audio_base64,
+        is_final,
+        priority,
+        timestamp_sec: current_epoch_sec(),
+    };
+
+    node.send_ptt_chunk(chunk);
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_send_ptt_floor(
+    channel_c: *const c_char,
+    is_transmitting: bool,
+    priority_c: *const c_char,
+) -> bool {
+    if channel_c.is_null() {
+        return false;
+    }
+    let channel = unsafe { CStr::from_ptr(channel_c).to_string_lossy().into_owned() };
+    let priority = if priority_c.is_null() {
+        "normal".to_string()
+    } else {
+        unsafe { CStr::from_ptr(priority_c).to_string_lossy().into_owned() }
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    let profile = node.get_my_profile();
+    let signal = PttFloorSignal {
+        channel,
+        speaker_hash: profile.dest_hash,
+        speaker_nickname: profile.nickname,
+        speaker_callsign: profile.callsign,
+        is_transmitting,
+        priority,
+        timestamp_sec: current_epoch_sec(),
+    };
+
+    node.send_ptt_floor(signal);
+    true
 }

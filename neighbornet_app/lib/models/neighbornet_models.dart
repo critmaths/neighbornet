@@ -694,5 +694,186 @@ class UserProfile {
   }
 }
 
+// --- PUSH-TO-TALK (PTT) TACTICAL WALKIE-TALKIE MODELS ---
+
+class PttChannelInfo {
+  final String id;
+  final String name;
+  final String frequencyLabel;
+  final String description;
+  final bool isEmergency;
+
+  const PttChannelInfo({
+    required this.id,
+    required this.name,
+    required this.frequencyLabel,
+    required this.description,
+    this.isEmergency = false,
+  });
+}
+
+const List<PttChannelInfo> kStandardPttChannels = [
+  PttChannelInfo(
+    id: 'CH-01',
+    name: 'Tac-General',
+    frequencyLabel: '462.5625 MHz (Simplex)',
+    description: 'Primary community mesh calling & tactical floor channel',
+  ),
+  PttChannelInfo(
+    id: 'CH-02',
+    name: 'Logistics & Supplies',
+    frequencyLabel: '462.5875 MHz (Simplex)',
+    description: 'Resource distribution, transport convoys, and inventory coordination',
+  ),
+  PttChannelInfo(
+    id: 'CH-03',
+    name: 'CERT & Medical',
+    frequencyLabel: '462.6125 MHz (Simplex)',
+    description: 'First-aid triage, search and rescue, and casualty evacuation',
+  ),
+  PttChannelInfo(
+    id: 'CH-09',
+    name: 'Emergency Distress Net',
+    frequencyLabel: '462.6750 MHz (Priority Net)',
+    description: 'Emergency priority broadcast channel with Net Control override',
+    isEmergency: true,
+  ),
+  PttChannelInfo(
+    id: 'CH-16',
+    name: 'Tactical Recon',
+    frequencyLabel: '462.7250 MHz (Simplex)',
+    description: 'Perimeter patrol, observation posts, and situational security reports',
+  ),
+];
+
+class PttVoiceChunk {
+  final String sessionId;
+  final int sequence;
+  final String channel;
+  final String senderHash;
+  final String senderNickname;
+  final String senderCallsign;
+  final String audioBase64;
+  final bool isFinal;
+  final String priority;
+  final int timestampSec;
+
+  PttVoiceChunk({
+    required this.sessionId,
+    required this.sequence,
+    required this.channel,
+    required this.senderHash,
+    required this.senderNickname,
+    required this.senderCallsign,
+    required this.audioBase64,
+    required this.isFinal,
+    this.priority = 'normal',
+    required this.timestampSec,
+  });
+
+  factory PttVoiceChunk.fromJson(Map<String, dynamic> json) {
+    return PttVoiceChunk(
+      sessionId: json['session_id'] as String? ?? '',
+      sequence: (json['sequence'] as num?)?.toInt() ?? 0,
+      channel: json['channel'] as String? ?? 'CH-01',
+      senderHash: json['sender_hash'] as String? ?? '',
+      senderNickname: json['sender_nickname'] as String? ?? 'Neighbor',
+      senderCallsign: json['sender_callsign'] as String? ?? '',
+      audioBase64: json['audio_base64'] as String? ?? '',
+      isFinal: json['is_final'] as bool? ?? false,
+      priority: json['priority'] as String? ?? 'normal',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'session_id': sessionId,
+      'sequence': sequence,
+      'channel': channel,
+      'sender_hash': senderHash,
+      'sender_nickname': senderNickname,
+      'sender_callsign': senderCallsign,
+      'audio_base64': audioBase64,
+      'is_final': isFinal,
+      'priority': priority,
+      'timestamp_sec': timestampSec,
+    };
+  }
+}
+
+class PttFloorEvent {
+  final String channel;
+  final String speakerHash;
+  final String speakerNickname;
+  final String speakerCallsign;
+  final bool isTransmitting;
+  final String priority;
+  final int timestampSec;
+
+  PttFloorEvent({
+    required this.channel,
+    required this.speakerHash,
+    required this.speakerNickname,
+    required this.speakerCallsign,
+    required this.isTransmitting,
+    this.priority = 'normal',
+    required this.timestampSec,
+  });
+
+  factory PttFloorEvent.fromJson(Map<String, dynamic> json) {
+    return PttFloorEvent(
+      channel: json['channel'] as String? ?? 'CH-01',
+      speakerHash: json['speaker_hash'] as String? ?? '',
+      speakerNickname: json['speaker_nickname'] as String? ?? 'Neighbor',
+      speakerCallsign: json['speaker_callsign'] as String? ?? '',
+      isTransmitting: json['is_transmitting'] as bool? ?? false,
+      priority: json['priority'] as String? ?? 'normal',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'channel': channel,
+      'speaker_hash': speakerHash,
+      'speaker_nickname': speakerNickname,
+      'speaker_callsign': speakerCallsign,
+      'is_transmitting': isTransmitting,
+      'priority': priority,
+      'timestamp_sec': timestampSec,
+    };
+  }
+}
+
+class PttTransmissionLog {
+  final String id;
+  final String sessionId;
+  final String channel;
+  final String senderHash;
+  final String senderNickname;
+  final String senderCallsign;
+  final int durationSec;
+  final int chunkCount;
+  final String priority;
+  final int timestampSec;
+  final List<String> audioChunks;
+
+  PttTransmissionLog({
+    required this.id,
+    required this.sessionId,
+    required this.channel,
+    required this.senderHash,
+    required this.senderNickname,
+    required this.senderCallsign,
+    required this.durationSec,
+    required this.chunkCount,
+    this.priority = 'normal',
+    required this.timestampSec,
+    this.audioChunks = const [],
+  });
+}
+
+
 
 

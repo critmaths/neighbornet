@@ -9,6 +9,7 @@ import 'views/survival_manual_view.dart';
 import 'views/settings_view.dart';
 import 'views/voice_chat_view.dart';
 import 'views/forms_view.dart';
+import 'views/ptt_walkie_talkie_view.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
@@ -35,6 +36,7 @@ class NeighborNetApp extends StatelessWidget {
 
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider.value(value: state),
         ChangeNotifierProvider.value(value: vService),
       ],
       child: ListenableBuilder(
@@ -190,6 +192,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Voice Chat'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.radio_outlined),
+                    selectedIcon: Icon(Icons.radio),
+                    label: Text('Walkie-Talkie (PTT)'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.menu_book_outlined),
                     selectedIcon: Icon(Icons.menu_book),
                     label: Text('Survival Manual'),
@@ -233,10 +240,12 @@ class _MainShellState extends State<MainShell> {
       case 4:
         return const VoiceChatView();
       case 5:
-        return SurvivalManualView(state: widget.state);
+        return PttWalkieTalkieView(state: widget.state);
       case 6:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 7:
+        return EmergencyView(state: widget.state);
+      case 8:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

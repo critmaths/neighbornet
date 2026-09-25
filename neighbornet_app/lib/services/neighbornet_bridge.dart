@@ -88,6 +88,12 @@ typedef _DartCreateFormSchema = Pointer<Utf8> Function(
 typedef _NativeSubmitFormEntry = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _DartSubmitFormEntry = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
 
+typedef _NativeSendPttChunk = Bool Function(Pointer<Utf8>, Uint32, Pointer<Utf8>, Pointer<Utf8>, Bool, Pointer<Utf8>);
+typedef _DartSendPttChunk = bool Function(Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>, bool, Pointer<Utf8>);
+
+typedef _NativeSendPttFloor = Bool Function(Pointer<Utf8>, Bool, Pointer<Utf8>);
+typedef _DartSendPttFloor = bool Function(Pointer<Utf8>, bool, Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -138,6 +144,9 @@ class NeighborNetBridge {
   late _DartGetRoomData _updateMyProfile;
   late _DartGetRoomData _getPeerProfileJson;
   late _DartGetJson _getAllProfilesJson;
+
+  late _DartSendPttChunk _sendPttChunk;
+  late _DartSendPttFloor _sendPttFloor;
 
   bool get isReady => _isInitialized;
 
@@ -208,6 +217,9 @@ class NeighborNetBridge {
     _updateMyProfile = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_update_my_profile');
     _getPeerProfileJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_peer_profile_json');
     _getAllProfilesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_all_profiles_json');
+
+    _sendPttChunk = _dylib!.lookupFunction<_NativeSendPttChunk, _DartSendPttChunk>('neighbornet_send_ptt_chunk');
+    _sendPttFloor = _dylib!.lookupFunction<_NativeSendPttFloor, _DartSendPttFloor>('neighbornet_send_ptt_floor');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -747,6 +759,49 @@ class NeighborNetBridge {
       return [];
     } finally {
       _freeString(ptr);
+    }
+  }
+
+  bool sendPttChunk({
+    required String sessionId,
+    required int sequence,
+    required String channel,
+    required String audioBase64,
+    required bool isFinal,
+    String priority = 'normal',
+  }) {
+    if (!_isInitialized) return false;
+    final sessPtr = sessionId.toNativeUtf8();
+    final chanPtr = channel.toNativeUtf8();
+    final audioPtr = audioBase64.toNativeUtf8();
+    final prioPtr = priority.toNativeUtf8();
+    try {
+      return _sendPttChunk(sessPtr, sequence, chanPtr, audioPtr, isFinal, prioPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(sessPtr);
+      calloc.free(chanPtr);
+      calloc.free(audioPtr);
+      calloc.free(prioPtr);
+    }
+  }
+
+  bool sendPttFloor({
+    required String channel,
+    required bool isTransmitting,
+    String priority = 'normal',
+  }) {
+    if (!_isInitialized) return false;
+    final chanPtr = channel.toNativeUtf8();
+    final prioPtr = priority.toNativeUtf8();
+    try {
+      return _sendPttFloor(chanPtr, isTransmitting, prioPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(chanPtr);
+      calloc.free(prioPtr);
     }
   }
 }
