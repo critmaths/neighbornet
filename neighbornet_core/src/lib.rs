@@ -236,6 +236,50 @@ pub struct FormEntry {
     pub signature_hex: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BarterListing {
+    pub id: String,
+    pub listing_type: String, // "offer", "request", "skill"
+    pub title: String,
+    pub description: String,
+    pub category: String, // "fuel", "food_water", "medical", "tools", "shelter", "skills", "comms", "general"
+    pub item_condition: String, // "new", "good", "fair", "poor", "na"
+    pub seeking: String,
+    pub location_hint: String,
+    pub author_hash: String,
+    pub author_nickname: String,
+    pub author_callsign: String,
+    pub status: String, // "active", "pending", "completed", "cancelled"
+    pub timestamp_sec: u64,
+    pub signature_hex: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BarterProposal {
+    pub id: String,
+    pub listing_id: String,
+    pub proposer_hash: String,
+    pub proposer_nickname: String,
+    pub proposer_callsign: String,
+    pub offered_items: String,
+    pub counter_message: String,
+    pub status: String, // "proposed", "accepted", "declined", "completed"
+    pub timestamp_sec: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CommunityVouch {
+    pub id: String,
+    pub target_node_hash: String,
+    pub voucher_node_hash: String,
+    pub voucher_nickname: String,
+    pub voucher_callsign: String,
+    pub rating: u8, // 1 to 5 stars
+    pub review_comment: String,
+    pub timestamp_sec: u64,
+    pub signature_hex: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "kind")]
 pub enum WireEnvelope {
@@ -261,6 +305,10 @@ pub enum WireEnvelope {
         known_profile_hashes: Vec<String>,
         #[serde(default)]
         known_marker_ids: Vec<String>,
+        #[serde(default)]
+        known_listing_ids: Vec<String>,
+        #[serde(default)]
+        known_vouch_ids: Vec<String>,
     },
     SyncResponse {
         bulletins: Vec<BulletinPost>,
@@ -274,6 +322,10 @@ pub enum WireEnvelope {
         profiles: Vec<UserProfile>,
         #[serde(default)]
         markers: Vec<TacticalMarker>,
+        #[serde(default)]
+        listings: Vec<BarterListing>,
+        #[serde(default)]
+        vouches: Vec<CommunityVouch>,
     },
     FileAnnounce(SharedFileMeta),
     FileChunkRequest {
@@ -305,6 +357,18 @@ pub enum WireEnvelope {
     MarkerDelete(String),
     TraceRequest(TraceroutePacket),
     TraceResponse(TraceroutePacket),
+    BarterListingAnnounce(BarterListing),
+    BarterListingStatusUpdate {
+        listing_id: String,
+        status: String,
+    },
+    BarterProposalAnnounce(BarterProposal),
+    BarterProposalStatusUpdate {
+        proposal_id: String,
+        listing_id: String,
+        status: String,
+    },
+    CommunityVouchAnnounce(CommunityVouch),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -366,6 +430,9 @@ pub struct NodeInner {
     pub user_profiles: RwLock<HashMap<String, UserProfile>>,
     pub markers: RwLock<HashMap<String, TacticalMarker>>,
     pub traceroutes: RwLock<HashMap<String, TraceroutePacket>>,
+    pub barter_listings: RwLock<HashMap<String, BarterListing>>,
+    pub barter_proposals: RwLock<HashMap<String, Vec<BarterProposal>>>,
+    pub community_vouches: RwLock<HashMap<String, Vec<CommunityVouch>>>,
     pub seen_ids: RwLock<HashSet<String>>,
     pub running: AtomicBool,
     pub start_time: Instant,
@@ -976,7 +1043,53 @@ impl NeighborNode {
                 total_rtt_ms INTEGER,
                 hops_json TEXT NOT NULL
               );
-              CREATE INDEX IF NOT EXISTS idx_traceroutes_created ON traceroutes(created_at_ms);"
+              CREATE INDEX IF NOT EXISTS idx_traceroutes_created ON traceroutes(created_at_ms);
+
+              CREATE TABLE IF NOT EXISTS barter_listings (
+                id TEXT PRIMARY KEY,
+                listing_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL,
+                item_condition TEXT NOT NULL,
+                seeking TEXT NOT NULL,
+                location_hint TEXT NOT NULL,
+                author_hash TEXT NOT NULL,
+                author_nickname TEXT NOT NULL,
+                author_callsign TEXT NOT NULL,
+                status TEXT NOT NULL,
+                timestamp_sec INTEGER NOT NULL,
+                signature_hex TEXT NOT NULL
+              );
+              CREATE INDEX IF NOT EXISTS idx_barter_category ON barter_listings(category);
+              CREATE INDEX IF NOT EXISTS idx_barter_type ON barter_listings(listing_type);
+              CREATE INDEX IF NOT EXISTS idx_barter_timestamp ON barter_listings(timestamp_sec);
+
+              CREATE TABLE IF NOT EXISTS barter_proposals (
+                id TEXT PRIMARY KEY,
+                listing_id TEXT NOT NULL,
+                proposer_hash TEXT NOT NULL,
+                proposer_nickname TEXT NOT NULL,
+                proposer_callsign TEXT NOT NULL,
+                offered_items TEXT NOT NULL,
+                counter_message TEXT NOT NULL,
+                status TEXT NOT NULL,
+                timestamp_sec INTEGER NOT NULL
+              );
+              CREATE INDEX IF NOT EXISTS idx_proposals_listing ON barter_proposals(listing_id);
+
+              CREATE TABLE IF NOT EXISTS community_vouches (
+                id TEXT PRIMARY KEY,
+                target_node_hash TEXT NOT NULL,
+                voucher_node_hash TEXT NOT NULL,
+                voucher_nickname TEXT NOT NULL,
+                voucher_callsign TEXT NOT NULL,
+                rating INTEGER NOT NULL,
+                review_comment TEXT NOT NULL,
+                timestamp_sec INTEGER NOT NULL,
+                signature_hex TEXT NOT NULL
+              );
+              CREATE INDEX IF NOT EXISTS idx_vouches_target ON community_vouches(target_node_hash);"
         ).map_err(|e| format!("Failed to initialize DB schema: {}", e))?;
 
         let _ = db.execute("ALTER TABLE messages ADD COLUMN audio_base64 TEXT", []);
@@ -1155,6 +1268,77 @@ impl NeighborNode {
             }
         }
 
+        let mut loaded_barter_listings = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, listing_type, title, description, category, item_condition, seeking, location_hint, author_hash, author_nickname, author_callsign, status, timestamp_sec, signature_hex FROM barter_listings") {
+            if let Ok(l_iter) = stmt.query_map([], |row| {
+                Ok(BarterListing {
+                    id: row.get(0)?,
+                    listing_type: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    category: row.get(4)?,
+                    item_condition: row.get(5)?,
+                    seeking: row.get(6)?,
+                    location_hint: row.get(7)?,
+                    author_hash: row.get(8)?,
+                    author_nickname: row.get(9)?,
+                    author_callsign: row.get(10)?,
+                    status: row.get(11)?,
+                    timestamp_sec: row.get::<_, i64>(12)? as u64,
+                    signature_hex: row.get(13)?,
+                })
+            }) {
+                for l in l_iter.flatten() {
+                    seen_ids.insert(l.id.clone());
+                    loaded_barter_listings.insert(l.id.clone(), l);
+                }
+            }
+        }
+
+        let mut loaded_barter_proposals: HashMap<String, Vec<BarterProposal>> = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, listing_id, proposer_hash, proposer_nickname, proposer_callsign, offered_items, counter_message, status, timestamp_sec FROM barter_proposals") {
+            if let Ok(p_iter) = stmt.query_map([], |row| {
+                Ok(BarterProposal {
+                    id: row.get(0)?,
+                    listing_id: row.get(1)?,
+                    proposer_hash: row.get(2)?,
+                    proposer_nickname: row.get(3)?,
+                    proposer_callsign: row.get(4)?,
+                    offered_items: row.get(5)?,
+                    counter_message: row.get(6)?,
+                    status: row.get(7)?,
+                    timestamp_sec: row.get::<_, i64>(8)? as u64,
+                })
+            }) {
+                for p in p_iter.flatten() {
+                    seen_ids.insert(p.id.clone());
+                    loaded_barter_proposals.entry(p.listing_id.clone()).or_default().push(p);
+                }
+            }
+        }
+
+        let mut loaded_community_vouches: HashMap<String, Vec<CommunityVouch>> = HashMap::new();
+        if let Ok(mut stmt) = db.prepare("SELECT id, target_node_hash, voucher_node_hash, voucher_nickname, voucher_callsign, rating, review_comment, timestamp_sec, signature_hex FROM community_vouches") {
+            if let Ok(v_iter) = stmt.query_map([], |row| {
+                Ok(CommunityVouch {
+                    id: row.get(0)?,
+                    target_node_hash: row.get(1)?,
+                    voucher_node_hash: row.get(2)?,
+                    voucher_nickname: row.get(3)?,
+                    voucher_callsign: row.get(4)?,
+                    rating: row.get::<_, i64>(5)? as u8,
+                    review_comment: row.get(6)?,
+                    timestamp_sec: row.get::<_, i64>(7)? as u64,
+                    signature_hex: row.get(8)?,
+                })
+            }) {
+                for v in v_iter.flatten() {
+                    seen_ids.insert(v.id.clone());
+                    loaded_community_vouches.entry(v.target_node_hash.clone()).or_default().push(v);
+                }
+            }
+        }
+
         let effective_nick = match loaded_profiles.get(&dest_hash_hex) {
             Some(my_prof) => my_prof.nickname.clone(),
             None => {
@@ -1210,6 +1394,9 @@ impl NeighborNode {
             user_profiles: RwLock::new(loaded_profiles),
             markers: RwLock::new(loaded_markers),
             traceroutes: RwLock::new(loaded_traceroutes),
+            barter_listings: RwLock::new(loaded_barter_listings),
+            barter_proposals: RwLock::new(loaded_barter_proposals),
+            community_vouches: RwLock::new(loaded_community_vouches),
             seen_ids: RwLock::new(seen_ids),
             running: AtomicBool::new(true),
             start_time: Instant::now(),
@@ -2352,6 +2539,296 @@ impl NeighborNode {
         Ok(entry)
     }
 
+    pub fn create_barter_listing(
+        &self,
+        listing_type: &str,
+        title: &str,
+        description: &str,
+        category: &str,
+        item_condition: &str,
+        seeking: &str,
+        location_hint: &str,
+    ) -> Result<BarterListing, String> {
+        let now = current_epoch_sec();
+        let author_hash = self.inner.dest_hash_hex.clone();
+        let author_nickname = self.inner.nickname.read().clone();
+        let author_callsign = self
+            .inner
+            .user_profiles
+            .read()
+            .get(&author_hash)
+            .map(|p| p.callsign.clone())
+            .unwrap_or_default();
+
+        let id = format!(
+            "barter-{}",
+            &compute_hash(&format!("{}:{}:{}:{}", author_hash, title, category, now))[..16]
+        );
+        let signature_hex = compute_hash(&format!("{}:{}:{}:{}:{}:{}", id, author_hash, title, category, seeking, now));
+
+        let listing = BarterListing {
+            id: id.clone(),
+            listing_type: listing_type.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            category: category.to_string(),
+            item_condition: item_condition.to_string(),
+            seeking: seeking.to_string(),
+            location_hint: location_hint.to_string(),
+            author_hash,
+            author_nickname,
+            author_callsign,
+            status: "active".to_string(),
+            timestamp_sec: now,
+            signature_hex,
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO barter_listings (id, listing_type, title, description, category, item_condition, seeking, location_hint, author_hash, author_nickname, author_callsign, status, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                rusqlite::params![
+                    listing.id,
+                    listing.listing_type,
+                    listing.title,
+                    listing.description,
+                    listing.category,
+                    listing.item_condition,
+                    listing.seeking,
+                    listing.location_hint,
+                    listing.author_hash,
+                    listing.author_nickname,
+                    listing.author_callsign,
+                    listing.status,
+                    listing.timestamp_sec as i64,
+                    listing.signature_hex
+                ],
+            );
+        }
+
+        self.inner.barter_listings.write().insert(id.clone(), listing.clone());
+        self.inner.seen_ids.write().insert(id);
+
+        let envelope = WireEnvelope::BarterListingAnnounce(listing.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(listing)
+    }
+
+    pub fn get_barter_listings(&self, category_filter: Option<&str>, type_filter: Option<&str>) -> Vec<BarterListing> {
+        let listings = self.inner.barter_listings.read();
+        let mut list: Vec<BarterListing> = listings
+            .values()
+            .filter(|l| {
+                let cat_match = match category_filter {
+                    Some(c) if !c.is_empty() && c != "all" => l.category == c,
+                    _ => true,
+                };
+                let type_match = match type_filter {
+                    Some(t) if !t.is_empty() && t != "all" => l.listing_type == t,
+                    _ => true,
+                };
+                cat_match && type_match
+            })
+            .cloned()
+            .collect();
+        list.sort_by(|a, b| b.timestamp_sec.cmp(&a.timestamp_sec));
+        list
+    }
+
+    pub fn update_barter_status(&self, listing_id: &str, status: &str) -> Result<bool, String> {
+        let mut listings = self.inner.barter_listings.write();
+        if let Some(listing) = listings.get_mut(listing_id) {
+            listing.status = status.to_string();
+            if let Ok(db) = self.inner.db.lock() {
+                let _ = db.execute(
+                    "UPDATE barter_listings SET status = ?1 WHERE id = ?2",
+                    rusqlite::params![status, listing_id],
+                );
+            }
+            let envelope = WireEnvelope::BarterListingStatusUpdate {
+                listing_id: listing_id.to_string(),
+                status: status.to_string(),
+            };
+            self.broadcast_envelope(&envelope);
+            Ok(true)
+        } else {
+            Err("Listing not found".to_string())
+        }
+    }
+
+    pub fn submit_barter_proposal(
+        &self,
+        listing_id: &str,
+        offered_items: &str,
+        counter_message: &str,
+    ) -> Result<BarterProposal, String> {
+        let now = current_epoch_sec();
+        let proposer_hash = self.inner.dest_hash_hex.clone();
+        let proposer_nickname = self.inner.nickname.read().clone();
+        let proposer_callsign = self
+            .inner
+            .user_profiles
+            .read()
+            .get(&proposer_hash)
+            .map(|p| p.callsign.clone())
+            .unwrap_or_default();
+
+        let id = format!(
+            "prop-{}",
+            &compute_hash(&format!("{}:{}:{}:{}", listing_id, proposer_hash, offered_items, now))[..16]
+        );
+
+        let proposal = BarterProposal {
+            id: id.clone(),
+            listing_id: listing_id.to_string(),
+            proposer_hash,
+            proposer_nickname,
+            proposer_callsign,
+            offered_items: offered_items.to_string(),
+            counter_message: counter_message.to_string(),
+            status: "proposed".to_string(),
+            timestamp_sec: now,
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO barter_proposals (id, listing_id, proposer_hash, proposer_nickname, proposer_callsign, offered_items, counter_message, status, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    proposal.id,
+                    proposal.listing_id,
+                    proposal.proposer_hash,
+                    proposal.proposer_nickname,
+                    proposal.proposer_callsign,
+                    proposal.offered_items,
+                    proposal.counter_message,
+                    proposal.status,
+                    proposal.timestamp_sec as i64
+                ],
+            );
+        }
+
+        self.inner
+            .barter_proposals
+            .write()
+            .entry(listing_id.to_string())
+            .or_default()
+            .push(proposal.clone());
+        self.inner.seen_ids.write().insert(id);
+
+        let envelope = WireEnvelope::BarterProposalAnnounce(proposal.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(proposal)
+    }
+
+    pub fn get_proposals_for_listing(&self, listing_id: &str) -> Vec<BarterProposal> {
+        self.inner
+            .barter_proposals
+            .read()
+            .get(listing_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn update_proposal_status(&self, proposal_id: &str, listing_id: &str, status: &str) -> Result<bool, String> {
+        let mut proposals_map = self.inner.barter_proposals.write();
+        if let Some(list) = proposals_map.get_mut(listing_id) {
+            if let Some(prop) = list.iter_mut().find(|p| p.id == proposal_id) {
+                prop.status = status.to_string();
+                if let Ok(db) = self.inner.db.lock() {
+                    let _ = db.execute(
+                        "UPDATE barter_proposals SET status = ?1 WHERE id = ?2",
+                        rusqlite::params![status, proposal_id],
+                    );
+                }
+                let envelope = WireEnvelope::BarterProposalStatusUpdate {
+                    proposal_id: proposal_id.to_string(),
+                    listing_id: listing_id.to_string(),
+                    status: status.to_string(),
+                };
+                self.broadcast_envelope(&envelope);
+                return Ok(true);
+            }
+        }
+        Err("Proposal not found".to_string())
+    }
+
+    pub fn submit_community_vouch(
+        &self,
+        target_node_hash: &str,
+        rating: u8,
+        review_comment: &str,
+    ) -> Result<CommunityVouch, String> {
+        let now = current_epoch_sec();
+        let voucher_node_hash = self.inner.dest_hash_hex.clone();
+        let voucher_nickname = self.inner.nickname.read().clone();
+        let voucher_callsign = self
+            .inner
+            .user_profiles
+            .read()
+            .get(&voucher_node_hash)
+            .map(|p| p.callsign.clone())
+            .unwrap_or_default();
+
+        let clamped_rating = rating.clamp(1, 5);
+        let id = format!(
+            "vouch-{}",
+            &compute_hash(&format!("{}:{}:{}:{}", target_node_hash, voucher_node_hash, clamped_rating, now))[..16]
+        );
+        let signature_hex = compute_hash(&format!("{}:{}:{}:{}:{}", id, target_node_hash, voucher_node_hash, clamped_rating, now));
+
+        let vouch = CommunityVouch {
+            id: id.clone(),
+            target_node_hash: target_node_hash.to_string(),
+            voucher_node_hash,
+            voucher_nickname,
+            voucher_callsign,
+            rating: clamped_rating,
+            review_comment: review_comment.to_string(),
+            timestamp_sec: now,
+            signature_hex,
+        };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO community_vouches (id, target_node_hash, voucher_node_hash, voucher_nickname, voucher_callsign, rating, review_comment, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    vouch.id,
+                    vouch.target_node_hash,
+                    vouch.voucher_node_hash,
+                    vouch.voucher_nickname,
+                    vouch.voucher_callsign,
+                    vouch.rating as i64,
+                    vouch.review_comment,
+                    vouch.timestamp_sec as i64,
+                    vouch.signature_hex
+                ],
+            );
+        }
+
+        self.inner
+            .community_vouches
+            .write()
+            .entry(target_node_hash.to_string())
+            .or_default()
+            .push(vouch.clone());
+        self.inner.seen_ids.write().insert(id);
+
+        let envelope = WireEnvelope::CommunityVouchAnnounce(vouch.clone());
+        self.broadcast_envelope(&envelope);
+
+        Ok(vouch)
+    }
+
+    pub fn get_vouches_for_node(&self, target_node_hash: &str) -> Vec<CommunityVouch> {
+        self.inner
+            .community_vouches
+            .read()
+            .get(target_node_hash)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Emergency Duress / Panic Wipe:
     /// Securely shreds local cryptographic identity, drops and vacuums SQLite databases,
     /// removes room and file caches, and wipes all in-memory message history.
@@ -2369,6 +2846,9 @@ impl NeighborNode {
         self.inner.user_profiles.write().clear();
         self.inner.markers.write().clear();
         self.inner.traceroutes.write().clear();
+        self.inner.barter_listings.write().clear();
+        self.inner.barter_proposals.write().clear();
+        self.inner.community_vouches.write().clear();
         self.inner.seen_ids.write().clear();
 
         // 2. Drop and securely reset SQLite tables
@@ -2380,6 +2860,9 @@ impl NeighborNode {
             let _ = conn.execute("DROP TABLE IF EXISTS form_schemas", []);
             let _ = conn.execute("DROP TABLE IF EXISTS form_entries", []);
             let _ = conn.execute("DROP TABLE IF EXISTS user_profiles", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS barter_listings", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS barter_proposals", []);
+            let _ = conn.execute("DROP TABLE IF EXISTS community_vouches", []);
             let _ = conn.execute("VACUUM", []);
 
             let _ = conn.execute(
@@ -2492,6 +2975,61 @@ impl NeighborNode {
                 )",
                 [],
             );
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS barter_listings (
+                    id TEXT PRIMARY KEY,
+                    listing_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    item_condition TEXT NOT NULL,
+                    seeking TEXT NOT NULL,
+                    location_hint TEXT NOT NULL,
+                    author_hash TEXT NOT NULL,
+                    author_nickname TEXT NOT NULL,
+                    author_callsign TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL,
+                    signature_hex TEXT NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_barter_category ON barter_listings(category)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_barter_type ON barter_listings(listing_type)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_barter_timestamp ON barter_listings(timestamp_sec)", []);
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS barter_proposals (
+                    id TEXT PRIMARY KEY,
+                    listing_id TEXT NOT NULL,
+                    proposer_hash TEXT NOT NULL,
+                    proposer_nickname TEXT NOT NULL,
+                    proposer_callsign TEXT NOT NULL,
+                    offered_items TEXT NOT NULL,
+                    counter_message TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_proposals_listing ON barter_proposals(listing_id)", []);
+
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS community_vouches (
+                    id TEXT PRIMARY KEY,
+                    target_node_hash TEXT NOT NULL,
+                    voucher_node_hash TEXT NOT NULL,
+                    voucher_nickname TEXT NOT NULL,
+                    voucher_callsign TEXT NOT NULL,
+                    rating INTEGER NOT NULL,
+                    review_comment TEXT NOT NULL,
+                    timestamp_sec INTEGER NOT NULL,
+                    signature_hex TEXT NOT NULL
+                )",
+                [],
+            );
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_vouches_target ON community_vouches(target_node_hash)", []);
         }
 
         let initial_prof = UserProfile {
@@ -2752,6 +3290,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 let known_e_ids: Vec<String> = inner.form_entries.read().values().flat_map(|v| v.iter().map(|e| e.id.clone())).collect();
                 let known_p_hashes: Vec<String> = inner.user_profiles.read().keys().cloned().collect();
                 let known_m_ids: Vec<String> = inner.markers.read().keys().cloned().collect();
+                let known_l_ids: Vec<String> = inner.barter_listings.read().keys().cloned().collect();
+                let known_v_ids: Vec<String> = inner.community_vouches.read().values().flat_map(|v| v.iter().map(|item| item.id.clone())).collect();
                 let sync_req = WireEnvelope::SyncRequest {
                     known_bulletin_ids: known_b_ids,
                     known_file_hashes: known_f_hashes,
@@ -2760,6 +3300,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     known_entry_ids: known_e_ids,
                     known_profile_hashes: known_p_hashes,
                     known_marker_ids: known_m_ids,
+                    known_listing_ids: known_l_ids,
+                    known_vouch_ids: known_v_ids,
                 };
                 if let Ok(json) = serde_json::to_string(&sync_req) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -2819,6 +3361,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             known_entry_ids,
             known_profile_hashes,
             known_marker_ids,
+            known_listing_ids,
+            known_vouch_ids,
         } => {
             let known_b_set: HashSet<String> = known_bulletin_ids.into_iter().collect();
             let missing_bulletins: Vec<BulletinPost> = inner
@@ -2884,6 +3428,25 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 .cloned()
                 .collect();
 
+            let known_l_set: HashSet<String> = known_listing_ids.into_iter().collect();
+            let missing_listings: Vec<BarterListing> = inner
+                .barter_listings
+                .read()
+                .values()
+                .filter(|l| !known_l_set.contains(&l.id))
+                .cloned()
+                .collect();
+
+            let known_v_set: HashSet<String> = known_vouch_ids.into_iter().collect();
+            let missing_vouches: Vec<CommunityVouch> = inner
+                .community_vouches
+                .read()
+                .values()
+                .flat_map(|v| v.iter())
+                .filter(|v| !known_v_set.contains(&v.id))
+                .cloned()
+                .collect();
+
             if !missing_bulletins.is_empty()
                 || !missing_files.is_empty()
                 || !missing_rooms.is_empty()
@@ -2891,6 +3454,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 || !missing_entries.is_empty()
                 || !missing_profiles.is_empty()
                 || !missing_markers.is_empty()
+                || !missing_listings.is_empty()
+                || !missing_vouches.is_empty()
             {
                 let resp = WireEnvelope::SyncResponse {
                     bulletins: missing_bulletins,
@@ -2900,6 +3465,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     entries: missing_entries,
                     profiles: missing_profiles,
                     markers: missing_markers,
+                    listings: missing_listings,
+                    vouches: missing_vouches,
                 };
                 if let Ok(json) = serde_json::to_string(&resp) {
                     let _ = socket.send_to(json.as_bytes(), src);
@@ -2914,6 +3481,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             entries,
             profiles,
             markers,
+            listings,
+            vouches,
         } => {
             let mut seen = inner.seen_ids.write();
             let mut stored_b = inner.bulletins.write();
@@ -3069,6 +3638,57 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         );
                     }
                     stored_m.insert(m.id.clone(), m);
+                }
+            }
+
+            let mut stored_l = inner.barter_listings.write();
+            for l in listings {
+                if seen.insert(l.id.clone()) {
+                    if let Ok(db) = inner.db.lock() {
+                        let _ = db.execute(
+                            "INSERT OR REPLACE INTO barter_listings (id, listing_type, title, description, category, item_condition, seeking, location_hint, author_hash, author_nickname, author_callsign, status, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                            rusqlite::params![
+                                l.id,
+                                l.listing_type,
+                                l.title,
+                                l.description,
+                                l.category,
+                                l.item_condition,
+                                l.seeking,
+                                l.location_hint,
+                                l.author_hash,
+                                l.author_nickname,
+                                l.author_callsign,
+                                l.status,
+                                l.timestamp_sec as i64,
+                                l.signature_hex
+                            ],
+                        );
+                    }
+                    stored_l.insert(l.id.clone(), l);
+                }
+            }
+
+            let mut stored_v = inner.community_vouches.write();
+            for v in vouches {
+                if seen.insert(v.id.clone()) {
+                    if let Ok(db) = inner.db.lock() {
+                        let _ = db.execute(
+                            "INSERT OR REPLACE INTO community_vouches (id, target_node_hash, voucher_node_hash, voucher_nickname, voucher_callsign, rating, review_comment, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                            rusqlite::params![
+                                v.id,
+                                v.target_node_hash,
+                                v.voucher_node_hash,
+                                v.voucher_nickname,
+                                v.voucher_callsign,
+                                v.rating as i64,
+                                v.review_comment,
+                                v.timestamp_sec as i64,
+                                v.signature_hex
+                            ],
+                        );
+                    }
+                    stored_v.entry(v.target_node_hash.clone()).or_default().push(v);
                 }
             }
         }
@@ -3433,6 +4053,117 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         }
                     }
                 }
+            }
+        }
+        WireEnvelope::BarterListingAnnounce(listing) => {
+            let mut seen = inner.seen_ids.write();
+            if seen.insert(listing.id.clone()) {
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO barter_listings (id, listing_type, title, description, category, item_condition, seeking, location_hint, author_hash, author_nickname, author_callsign, status, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                        rusqlite::params![
+                            listing.id,
+                            listing.listing_type,
+                            listing.title,
+                            listing.description,
+                            listing.category,
+                            listing.item_condition,
+                            listing.seeking,
+                            listing.location_hint,
+                            listing.author_hash,
+                            listing.author_nickname,
+                            listing.author_callsign,
+                            listing.status,
+                            listing.timestamp_sec as i64,
+                            listing.signature_hex
+                        ],
+                    );
+                }
+                inner.barter_listings.write().insert(listing.id.clone(), listing);
+            }
+        }
+        WireEnvelope::BarterListingStatusUpdate { listing_id, status } => {
+            let mut listings = inner.barter_listings.write();
+            if let Some(listing) = listings.get_mut(&listing_id) {
+                listing.status = status.clone();
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "UPDATE barter_listings SET status = ?1 WHERE id = ?2",
+                        rusqlite::params![status, listing_id],
+                    );
+                }
+            }
+        }
+        WireEnvelope::BarterProposalAnnounce(proposal) => {
+            let mut seen = inner.seen_ids.write();
+            if seen.insert(proposal.id.clone()) {
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO barter_proposals (id, listing_id, proposer_hash, proposer_nickname, proposer_callsign, offered_items, counter_message, status, timestamp_sec) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        rusqlite::params![
+                            proposal.id,
+                            proposal.listing_id,
+                            proposal.proposer_hash,
+                            proposal.proposer_nickname,
+                            proposal.proposer_callsign,
+                            proposal.offered_items,
+                            proposal.counter_message,
+                            proposal.status,
+                            proposal.timestamp_sec as i64
+                        ],
+                    );
+                }
+                inner
+                    .barter_proposals
+                    .write()
+                    .entry(proposal.listing_id.clone())
+                    .or_default()
+                    .push(proposal);
+            }
+        }
+        WireEnvelope::BarterProposalStatusUpdate {
+            proposal_id,
+            listing_id,
+            status,
+        } => {
+            let mut proposals_map = inner.barter_proposals.write();
+            if let Some(list) = proposals_map.get_mut(&listing_id) {
+                if let Some(prop) = list.iter_mut().find(|p| p.id == proposal_id) {
+                    prop.status = status.clone();
+                    if let Ok(db) = inner.db.lock() {
+                        let _ = db.execute(
+                            "UPDATE barter_proposals SET status = ?1 WHERE id = ?2",
+                            rusqlite::params![status, proposal_id],
+                        );
+                    }
+                }
+            }
+        }
+        WireEnvelope::CommunityVouchAnnounce(vouch) => {
+            let mut seen = inner.seen_ids.write();
+            if seen.insert(vouch.id.clone()) {
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO community_vouches (id, target_node_hash, voucher_node_hash, voucher_nickname, voucher_callsign, rating, review_comment, timestamp_sec, signature_hex) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        rusqlite::params![
+                            vouch.id,
+                            vouch.target_node_hash,
+                            vouch.voucher_node_hash,
+                            vouch.voucher_nickname,
+                            vouch.voucher_callsign,
+                            vouch.rating as i64,
+                            vouch.review_comment,
+                            vouch.timestamp_sec as i64,
+                            vouch.signature_hex
+                        ],
+                    );
+                }
+                inner
+                    .community_vouches
+                    .write()
+                    .entry(vouch.target_node_hash.clone())
+                    .or_default()
+                    .push(vouch);
             }
         }
     }
@@ -4494,4 +5225,238 @@ pub extern "C" fn neighbornet_simulate_trace(target_hash_c: *const c_char) -> *m
         }
     }
 }
+
+// --- BARTER & COMMUNITY VOUCH FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_create_barter_listing(
+    listing_type_c: *const c_char,
+    title_c: *const c_char,
+    description_c: *const c_char,
+    category_c: *const c_char,
+    item_condition_c: *const c_char,
+    seeking_c: *const c_char,
+    location_hint_c: *const c_char,
+) -> *mut c_char {
+    if listing_type_c.is_null()
+        || title_c.is_null()
+        || description_c.is_null()
+        || category_c.is_null()
+        || item_condition_c.is_null()
+        || seeking_c.is_null()
+        || location_hint_c.is_null()
+    {
+        return to_c_string("{\"error\":\"Null parameters passed\"}".to_string());
+    }
+    let listing_type = unsafe { CStr::from_ptr(listing_type_c).to_string_lossy().into_owned() };
+    let title = unsafe { CStr::from_ptr(title_c).to_string_lossy().into_owned() };
+    let description = unsafe { CStr::from_ptr(description_c).to_string_lossy().into_owned() };
+    let category = unsafe { CStr::from_ptr(category_c).to_string_lossy().into_owned() };
+    let item_condition = unsafe { CStr::from_ptr(item_condition_c).to_string_lossy().into_owned() };
+    let seeking = unsafe { CStr::from_ptr(seeking_c).to_string_lossy().into_owned() };
+    let location_hint = unsafe { CStr::from_ptr(location_hint_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.create_barter_listing(
+        &listing_type,
+        &title,
+        &description,
+        &category,
+        &item_condition,
+        &seeking,
+        &location_hint,
+    ) {
+        Ok(listing) => {
+            let json = serde_json::to_string(&listing).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_barter_listings_json(
+    category_filter_c: *const c_char,
+    type_filter_c: *const c_char,
+) -> *mut c_char {
+    let category_filter = if !category_filter_c.is_null() {
+        let s = unsafe { CStr::from_ptr(category_filter_c).to_string_lossy().into_owned() };
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    } else {
+        None
+    };
+
+    let type_filter = if !type_filter_c.is_null() {
+        let s = unsafe { CStr::from_ptr(type_filter_c).to_string_lossy().into_owned() };
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    } else {
+        None
+    };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_barter_listings(category_filter.as_deref(), type_filter.as_deref());
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_update_barter_status(
+    listing_id_c: *const c_char,
+    status_c: *const c_char,
+) -> bool {
+    if listing_id_c.is_null() || status_c.is_null() {
+        return false;
+    }
+    let listing_id = unsafe { CStr::from_ptr(listing_id_c).to_string_lossy().into_owned() };
+    let status = unsafe { CStr::from_ptr(status_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.update_barter_status(&listing_id, &status).unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_submit_barter_proposal(
+    listing_id_c: *const c_char,
+    offered_items_c: *const c_char,
+    counter_message_c: *const c_char,
+) -> *mut c_char {
+    if listing_id_c.is_null() || offered_items_c.is_null() || counter_message_c.is_null() {
+        return to_c_string("{\"error\":\"Null parameters passed\"}".to_string());
+    }
+    let listing_id = unsafe { CStr::from_ptr(listing_id_c).to_string_lossy().into_owned() };
+    let offered_items = unsafe { CStr::from_ptr(offered_items_c).to_string_lossy().into_owned() };
+    let counter_message = unsafe { CStr::from_ptr(counter_message_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.submit_barter_proposal(&listing_id, &offered_items, &counter_message) {
+        Ok(proposal) => {
+            let json = serde_json::to_string(&proposal).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_proposals_for_listing_json(listing_id_c: *const c_char) -> *mut c_char {
+    if listing_id_c.is_null() {
+        return to_c_string("[]".to_string());
+    }
+    let listing_id = unsafe { CStr::from_ptr(listing_id_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_proposals_for_listing(&listing_id);
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_update_proposal_status(
+    proposal_id_c: *const c_char,
+    listing_id_c: *const c_char,
+    status_c: *const c_char,
+) -> bool {
+    if proposal_id_c.is_null() || listing_id_c.is_null() || status_c.is_null() {
+        return false;
+    }
+    let proposal_id = unsafe { CStr::from_ptr(proposal_id_c).to_string_lossy().into_owned() };
+    let listing_id = unsafe { CStr::from_ptr(listing_id_c).to_string_lossy().into_owned() };
+    let status = unsafe { CStr::from_ptr(status_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.update_proposal_status(&proposal_id, &listing_id, &status).unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_submit_community_vouch(
+    target_node_hash_c: *const c_char,
+    rating: u8,
+    review_comment_c: *const c_char,
+) -> *mut c_char {
+    if target_node_hash_c.is_null() || review_comment_c.is_null() {
+        return to_c_string("{\"error\":\"Null parameters passed\"}".to_string());
+    }
+    let target_node_hash = unsafe { CStr::from_ptr(target_node_hash_c).to_string_lossy().into_owned() };
+    let review_comment = unsafe { CStr::from_ptr(review_comment_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.submit_community_vouch(&target_node_hash, rating, &review_comment) {
+        Ok(vouch) => {
+            let json = serde_json::to_string(&vouch).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_vouches_for_node_json(target_node_hash_c: *const c_char) -> *mut c_char {
+    if target_node_hash_c.is_null() {
+        return to_c_string("[]".to_string());
+    }
+    let target_node_hash = unsafe { CStr::from_ptr(target_node_hash_c).to_string_lossy().into_owned() };
+
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("[]".to_string()),
+    };
+
+    let list = node.get_vouches_for_node(&target_node_hash);
+    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
 

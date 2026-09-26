@@ -9,6 +9,7 @@ import 'views/survival_manual_view.dart';
 import 'views/settings_view.dart';
 import 'views/voice_chat_view.dart';
 import 'views/forms_view.dart';
+import 'views/marketplace_view.dart';
 import 'views/ptt_walkie_talkie_view.dart';
 import 'views/tactical_map_view.dart';
 import 'views/traceroute_view.dart';
@@ -190,6 +191,11 @@ class _MainShellState extends State<MainShell> {
                     label: Text('Community Forms'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.storefront_outlined),
+                    selectedIcon: Icon(Icons.storefront),
+                    label: Text('Market & Barter'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.map_outlined),
                     selectedIcon: Icon(Icons.map),
                     label: Text('Tactical Map'),
@@ -256,20 +262,22 @@ class _MainShellState extends State<MainShell> {
       case 3:
         return FormsView(state: widget.state);
       case 4:
-        return const TacticalMapView();
+        return MarketplaceView(state: widget.state);
       case 5:
-        return const TracerouteView();
+        return const TacticalMapView();
       case 6:
-        return PeopleView(state: widget.state);
+        return const TracerouteView();
       case 7:
-        return const VoiceChatView();
+        return PeopleView(state: widget.state);
       case 8:
-        return PttWalkieTalkieView(state: widget.state);
+        return const VoiceChatView();
       case 9:
-        return SurvivalManualView(state: widget.state);
+        return PttWalkieTalkieView(state: widget.state);
       case 10:
-        return EmergencyView(state: widget.state);
+        return SurvivalManualView(state: widget.state);
       case 11:
+        return EmergencyView(state: widget.state);
+      case 12:
         return SettingsView(state: widget.state);
       default:
         return ChatView(state: widget.state);

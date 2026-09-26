@@ -21,6 +21,7 @@ void main() {
     expect(find.text('Bulletin'), findsOneWidget);
     expect(find.text('Files & Vault'), findsOneWidget);
     expect(find.text('Community Forms'), findsOneWidget);
+    expect(find.text('Market & Barter'), findsOneWidget);
     expect(find.text('Tactical Map'), findsOneWidget);
     expect(find.text('Mesh Traceroute'), findsOneWidget);
     expect(find.text('People & Nodes'), findsOneWidget);
@@ -34,6 +35,12 @@ void main() {
     await tester.tap(find.text('Bulletin'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Community Bulletin Board'), findsOneWidget);
+
+    // Switch to Market & Barter view
+    await tester.tap(find.text('Market & Barter'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Mutual Aid & Barter Marketplace'), findsOneWidget);
+    expect(find.text('Post Listing'), findsOneWidget);
 
     // Switch to Community Forms view
     await tester.tap(find.text('Community Forms'));

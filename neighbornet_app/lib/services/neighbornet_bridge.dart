@@ -119,6 +119,28 @@ typedef _DartPublishFileExtended = Pointer<Utf8> Function(
 typedef _NativeExportFile = Bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _DartExportFile = bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 
+typedef _NativeCreateBarterListing = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+typedef _DartCreateBarterListing = Pointer<Utf8> Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>
+);
+
+typedef _NativeGetBarterListings = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartGetBarterListings = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+
+typedef _NativeUpdateBarterStatus = Bool Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartUpdateBarterStatus = bool Function(Pointer<Utf8>, Pointer<Utf8>);
+
+typedef _NativeSubmitBarterProposal = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartSubmitBarterProposal = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+
+typedef _NativeUpdateProposalStatus = Bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _DartUpdateProposalStatus = bool Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+
+typedef _NativeSubmitCommunityVouch = Pointer<Utf8> Function(Pointer<Utf8>, Uint8, Pointer<Utf8>);
+typedef _DartSubmitCommunityVouch = Pointer<Utf8> Function(Pointer<Utf8>, int, Pointer<Utf8>);
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -186,6 +208,15 @@ class NeighborNetBridge {
   late _DartGetJson _getTraceroutesJson;
   late _DartGetTracerouteById _getTracerouteById;
   late _DartSimulateTrace _simulateTrace;
+
+  late _DartCreateBarterListing _createBarterListing;
+  late _DartGetBarterListings _getBarterListingsJson;
+  late _DartUpdateBarterStatus _updateBarterStatus;
+  late _DartSubmitBarterProposal _submitBarterProposal;
+  late _DartGetRoomData _getProposalsForListingJson;
+  late _DartUpdateProposalStatus _updateProposalStatus;
+  late _DartSubmitCommunityVouch _submitCommunityVouch;
+  late _DartGetRoomData _getVouchesForNodeJson;
 
   bool get isReady => _isInitialized;
 
@@ -273,6 +304,15 @@ class NeighborNetBridge {
     _getTraceroutesJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_traceroutes_json');
     _getTracerouteById = _dylib!.lookupFunction<_NativeGetTracerouteById, _DartGetTracerouteById>('neighbornet_get_traceroute_by_id_json');
     _simulateTrace = _dylib!.lookupFunction<_NativeSimulateTrace, _DartSimulateTrace>('neighbornet_simulate_trace');
+
+    _createBarterListing = _dylib!.lookupFunction<_NativeCreateBarterListing, _DartCreateBarterListing>('neighbornet_create_barter_listing');
+    _getBarterListingsJson = _dylib!.lookupFunction<_NativeGetBarterListings, _DartGetBarterListings>('neighbornet_get_barter_listings_json');
+    _updateBarterStatus = _dylib!.lookupFunction<_NativeUpdateBarterStatus, _DartUpdateBarterStatus>('neighbornet_update_barter_status');
+    _submitBarterProposal = _dylib!.lookupFunction<_NativeSubmitBarterProposal, _DartSubmitBarterProposal>('neighbornet_submit_barter_proposal');
+    _getProposalsForListingJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_proposals_for_listing_json');
+    _updateProposalStatus = _dylib!.lookupFunction<_NativeUpdateProposalStatus, _DartUpdateProposalStatus>('neighbornet_update_proposal_status');
+    _submitCommunityVouch = _dylib!.lookupFunction<_NativeSubmitCommunityVouch, _DartSubmitCommunityVouch>('neighbornet_submit_community_vouch');
+    _getVouchesForNodeJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_vouches_for_node_json');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -1089,4 +1129,194 @@ class NeighborNetBridge {
       calloc.free(hashPtr);
     }
   }
+
+  BarterListing? createBarterListing({
+    required String listingType,
+    required String title,
+    required String description,
+    required String category,
+    String itemCondition = 'good',
+    required String seeking,
+    required String locationHint,
+  }) {
+    if (!_isInitialized) return null;
+    final ltPtr = listingType.toNativeUtf8();
+    final tPtr = title.toNativeUtf8();
+    final dPtr = description.toNativeUtf8();
+    final cPtr = category.toNativeUtf8();
+    final icPtr = itemCondition.toNativeUtf8();
+    final sPtr = seeking.toNativeUtf8();
+    final lhPtr = locationHint.toNativeUtf8();
+    try {
+      final ptr = _createBarterListing(ltPtr, tPtr, dPtr, cPtr, icPtr, sPtr, lhPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return BarterListing.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(ltPtr);
+      calloc.free(tPtr);
+      calloc.free(dPtr);
+      calloc.free(cPtr);
+      calloc.free(icPtr);
+      calloc.free(sPtr);
+      calloc.free(lhPtr);
+    }
+  }
+
+  List<BarterListing> getBarterListings({String? categoryFilter, String? typeFilter}) {
+    if (!_isInitialized) return [];
+    final cPtr = (categoryFilter != null && categoryFilter.isNotEmpty) ? categoryFilter.toNativeUtf8() : nullptr;
+    final tPtr = (typeFilter != null && typeFilter.isNotEmpty) ? typeFilter.toNativeUtf8() : nullptr;
+    try {
+      final ptr = _getBarterListingsJson(cPtr, tPtr);
+      if (ptr == nullptr) return [];
+      try {
+        final jsonStr = ptr.toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return list.map((item) => BarterListing.fromJson(item as Map<String, dynamic>)).toList();
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return [];
+    } finally {
+      if (cPtr != nullptr) calloc.free(cPtr);
+      if (tPtr != nullptr) calloc.free(tPtr);
+    }
+  }
+
+  bool updateBarterStatus(String listingId, String status) {
+    if (!_isInitialized) return false;
+    final idPtr = listingId.toNativeUtf8();
+    final sPtr = status.toNativeUtf8();
+    try {
+      return _updateBarterStatus(idPtr, sPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(idPtr);
+      calloc.free(sPtr);
+    }
+  }
+
+  BarterProposal? submitBarterProposal({
+    required String listingId,
+    required String offeredItems,
+    required String counterMessage,
+  }) {
+    if (!_isInitialized) return null;
+    final idPtr = listingId.toNativeUtf8();
+    final oiPtr = offeredItems.toNativeUtf8();
+    final cmPtr = counterMessage.toNativeUtf8();
+    try {
+      final ptr = _submitBarterProposal(idPtr, oiPtr, cmPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return BarterProposal.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(idPtr);
+      calloc.free(oiPtr);
+      calloc.free(cmPtr);
+    }
+  }
+
+  List<BarterProposal> getProposalsForListing(String listingId) {
+    if (!_isInitialized) return [];
+    final idPtr = listingId.toNativeUtf8();
+    try {
+      final ptr = _getProposalsForListingJson(idPtr);
+      if (ptr == nullptr) return [];
+      try {
+        final jsonStr = ptr.toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return list.map((item) => BarterProposal.fromJson(item as Map<String, dynamic>)).toList();
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return [];
+    } finally {
+      calloc.free(idPtr);
+    }
+  }
+
+  bool updateProposalStatus(String proposalId, String listingId, String status) {
+    if (!_isInitialized) return false;
+    final pIdPtr = proposalId.toNativeUtf8();
+    final lIdPtr = listingId.toNativeUtf8();
+    final sPtr = status.toNativeUtf8();
+    try {
+      return _updateProposalStatus(pIdPtr, lIdPtr, sPtr);
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(pIdPtr);
+      calloc.free(lIdPtr);
+      calloc.free(sPtr);
+    }
+  }
+
+  CommunityVouch? submitCommunityVouch({
+    required String targetNodeHash,
+    required int rating,
+    required String reviewComment,
+  }) {
+    if (!_isInitialized) return null;
+    final thPtr = targetNodeHash.toNativeUtf8();
+    final rcPtr = reviewComment.toNativeUtf8();
+    try {
+      final ptr = _submitCommunityVouch(thPtr, rating, rcPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (map.containsKey('error')) return null;
+        return CommunityVouch.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(thPtr);
+      calloc.free(rcPtr);
+    }
+  }
+
+  List<CommunityVouch> getVouchesForNode(String targetNodeHash) {
+    if (!_isInitialized) return [];
+    final thPtr = targetNodeHash.toNativeUtf8();
+    try {
+      final ptr = _getVouchesForNodeJson(thPtr);
+      if (ptr == nullptr) return [];
+      try {
+        final jsonStr = ptr.toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return list.map((item) => CommunityVouch.fromJson(item as Map<String, dynamic>)).toList();
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return [];
+    } finally {
+      calloc.free(thPtr);
+    }
+  }
 }
+

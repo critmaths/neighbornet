@@ -1124,6 +1124,183 @@ class PttTransmissionLog {
   });
 }
 
+class BarterListing {
+  final String id;
+  final String listingType; // "offer", "request", "skill"
+  final String title;
+  final String description;
+  final String category; // "fuel", "food_water", "medical", "tools", "shelter", "skills", "comms", "general"
+  final String itemCondition; // "new", "good", "fair", "poor", "na"
+  final String seeking;
+  final String locationHint;
+  final String authorHash;
+  final String authorNickname;
+  final String authorCallsign;
+  final String status; // "active", "pending", "completed", "cancelled", "open"
+  final int timestampSec;
+  final String signatureHex;
+  final String? urgency;
+
+  BarterListing({
+    required this.id,
+    required this.listingType,
+    required this.title,
+    required this.description,
+    required this.category,
+    this.itemCondition = 'good',
+    required this.seeking,
+    required this.locationHint,
+    required this.authorHash,
+    required this.authorNickname,
+    this.authorCallsign = '',
+    required this.status,
+    required this.timestampSec,
+    this.signatureHex = '',
+    this.urgency,
+  });
+
+  factory BarterListing.fromJson(Map<String, dynamic> json) {
+    return BarterListing(
+      id: json['id'] as String? ?? '',
+      listingType: json['listing_type'] as String? ?? json['listingType'] as String? ?? 'offer',
+      title: json['title'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      category: json['category'] as String? ?? 'general',
+      itemCondition: json['item_condition'] as String? ?? json['itemCondition'] as String? ?? 'good',
+      seeking: json['seeking'] as String? ?? '',
+      locationHint: json['location_hint'] as String? ?? json['locationHint'] as String? ?? '',
+      authorHash: json['author_hash'] as String? ?? json['authorHash'] as String? ?? '',
+      authorNickname: json['author_nickname'] as String? ?? json['authorNickname'] as String? ?? 'Anonymous',
+      authorCallsign: json['author_callsign'] as String? ?? json['authorCallsign'] as String? ?? '',
+      status: json['status'] as String? ?? 'active',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? (json['timestampSec'] as num?)?.toInt() ?? 0,
+      signatureHex: json['signature_hex'] as String? ?? json['signatureHex'] as String? ?? '',
+      urgency: json['urgency'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'listing_type': listingType,
+      'title': title,
+      'description': description,
+      'category': category,
+      'item_condition': itemCondition,
+      'seeking': seeking,
+      'location_hint': locationHint,
+      'author_hash': authorHash,
+      'author_nickname': authorNickname,
+      'author_callsign': authorCallsign,
+      'status': status,
+      'timestamp_sec': timestampSec,
+      'signature_hex': signatureHex,
+      if (urgency != null) 'urgency': urgency,
+    };
+  }
+}
+
+class BarterProposal {
+  final String id;
+  final String listingId;
+  final String proposerHash;
+  final String proposerNickname;
+  final String proposerCallsign;
+  final String offeredItems;
+  final String counterMessage;
+  final String status; // "proposed", "pending", "accepted", "declined", "completed"
+  final int timestampSec;
+
+  BarterProposal({
+    required this.id,
+    required this.listingId,
+    required this.proposerHash,
+    required this.proposerNickname,
+    this.proposerCallsign = '',
+    required this.offeredItems,
+    required this.counterMessage,
+    required this.status,
+    required this.timestampSec,
+  });
+
+  factory BarterProposal.fromJson(Map<String, dynamic> json) {
+    return BarterProposal(
+      id: json['id'] as String? ?? '',
+      listingId: json['listing_id'] as String? ?? json['listingId'] as String? ?? '',
+      proposerHash: json['proposer_hash'] as String? ?? json['proposerHash'] as String? ?? '',
+      proposerNickname: json['proposer_nickname'] as String? ?? json['proposerNickname'] as String? ?? 'Anonymous',
+      proposerCallsign: json['proposer_callsign'] as String? ?? json['proposerCallsign'] as String? ?? '',
+      offeredItems: json['offered_items'] as String? ?? json['offeredItems'] as String? ?? '',
+      counterMessage: json['counter_message'] as String? ?? json['counterMessage'] as String? ?? '',
+      status: json['status'] as String? ?? 'proposed',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? (json['timestampSec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'listing_id': listingId,
+      'proposer_hash': proposerHash,
+      'proposer_nickname': proposerNickname,
+      'proposer_callsign': proposerCallsign,
+      'offered_items': offeredItems,
+      'counter_message': counterMessage,
+      'status': status,
+      'timestamp_sec': timestampSec,
+    };
+  }
+}
+
+class CommunityVouch {
+  final String id;
+  final String targetNodeHash;
+  final String voucherNodeHash;
+  final String voucherNickname;
+  final String voucherCallsign;
+  final int rating;
+  final String reviewComment;
+  final int timestampSec;
+
+  CommunityVouch({
+    required this.id,
+    required this.targetNodeHash,
+    required this.voucherNodeHash,
+    required this.voucherNickname,
+    this.voucherCallsign = '',
+    required this.rating,
+    required this.reviewComment,
+    required this.timestampSec,
+  });
+
+  factory CommunityVouch.fromJson(Map<String, dynamic> json) {
+    return CommunityVouch(
+      id: json['id'] as String? ?? '',
+      targetNodeHash: json['target_node_hash'] as String? ?? json['targetNodeHash'] as String? ?? '',
+      voucherNodeHash: json['voucher_node_hash'] as String? ?? json['voucherNodeHash'] as String? ?? '',
+      voucherNickname: json['voucher_nickname'] as String? ?? json['voucherNickname'] as String? ?? 'Anonymous',
+      voucherCallsign: json['voucher_callsign'] as String? ?? json['voucherCallsign'] as String? ?? '',
+      rating: (json['rating'] as num?)?.toInt() ?? 5,
+      reviewComment: json['review_comment'] as String? ?? json['reviewComment'] as String? ?? '',
+      timestampSec: (json['timestamp_sec'] as num?)?.toInt() ?? (json['timestampSec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'target_node_hash': targetNodeHash,
+      'voucher_node_hash': voucherNodeHash,
+      'voucher_nickname': voucherNickname,
+      'voucher_callsign': voucherCallsign,
+      'rating': rating,
+      'review_comment': reviewComment,
+      'timestamp_sec': timestampSec,
+    };
+  }
+}
+
+
 
 
 

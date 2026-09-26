@@ -40,6 +40,12 @@ class NeighborNetState extends ChangeNotifier {
   TracerouteSession? _selectedTrace;
   bool _isTracing = false;
 
+  List<BarterListing> _barterListings = [];
+  final Map<String, List<BarterProposal>> _barterProposals = {};
+  final Map<String, List<CommunityVouch>> _communityVouches = {};
+  String? _barterFilterCategory;
+  String? _barterFilterType;
+
   String _currentChannel = 'general';
   String? _errorMessage;
 
@@ -61,6 +67,11 @@ class NeighborNetState extends ChangeNotifier {
   List<TracerouteSession> get traceroutes => _traceroutes;
   TracerouteSession? get selectedTrace => _selectedTrace;
   bool get isTracing => _isTracing;
+
+  List<BarterListing> get barterListings => _barterListings;
+  String? get barterFilterCategory => _barterFilterCategory;
+  String? get barterFilterType => _barterFilterType;
+
   String get currentChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
@@ -76,6 +87,9 @@ class NeighborNetState extends ChangeNotifier {
   List<StewardVoteInfo> getProposals(String roomId) => _roomProposals[roomId] ?? _bridge.getProposals(roomId);
   List<GovernanceEventInfo> getAuditLog(String roomId) => _roomAuditLogs[roomId] ?? _bridge.getAuditLog(roomId);
   List<FormEntry> getFormEntriesForSchema(String schemaId) => _formEntries[schemaId] ?? _bridge.getFormEntries(schemaId);
+  List<BarterProposal> getProposalsForListing(String listingId) => _barterProposals[listingId] ?? _bridge.getProposalsForListing(listingId);
+  List<CommunityVouch> getVouchesForNode(String targetNodeHash) => _communityVouches[targetNodeHash] ?? _bridge.getVouchesForNode(targetNodeHash);
+
 
   int getUnreadCount(String channel) => _unreadCounts[channel] ?? 0;
   int get totalUnreadCount => _unreadCounts.values.fold(0, (a, b) => a + b);
@@ -278,6 +292,9 @@ class NeighborNetState extends ChangeNotifier {
       _traceroutes.clear();
       _selectedTrace = null;
       _myProfile = null;
+      _barterListings.clear();
+      _barterProposals.clear();
+      _communityVouches.clear();
       _currentChannel = 'general';
       _refreshState();
       notifyListeners();
@@ -301,6 +318,10 @@ class NeighborNetState extends ChangeNotifier {
         _selectedTrace = updated;
       }
     }
+    _barterListings = _bridge.getBarterListings(
+      categoryFilter: _barterFilterCategory,
+      typeFilter: _barterFilterType,
+    );
     _formSchemas = _bridge.getFormSchemas();
     for (final s in _formSchemas) {
       _formEntries[s.id] = _bridge.getFormEntries(s.id);
@@ -865,6 +886,106 @@ class NeighborNetState extends ChangeNotifier {
         _selectedTrace = updated;
       }
     }
+    notifyListeners();
+  }
+
+  // --- MUTUAL AID & BARTER MARKETPLACE METHODS ---
+
+  void setBarterFilters({String? category, String? listingType}) {
+    _barterFilterCategory = category;
+    _barterFilterType = listingType;
+    refreshBarterListings();
+    notifyListeners();
+  }
+
+  void refreshBarterListings() {
+    _barterListings = _bridge.getBarterListings(
+      categoryFilter: _barterFilterCategory,
+      typeFilter: _barterFilterType,
+    );
+    notifyListeners();
+  }
+
+  Future<BarterListing?> createBarterListing({
+    required String listingType,
+    required String title,
+    required String description,
+    required String category,
+    String itemCondition = 'good',
+    required String seeking,
+    required String locationHint,
+  }) async {
+    final listing = _bridge.createBarterListing(
+      listingType: listingType,
+      title: title,
+      description: description,
+      category: category,
+      itemCondition: itemCondition,
+      seeking: seeking,
+      locationHint: locationHint,
+    );
+    if (listing != null) {
+      refreshBarterListings();
+    }
+    return listing;
+  }
+
+  Future<bool> updateBarterStatus(String listingId, String status) async {
+    final success = _bridge.updateBarterStatus(listingId, status);
+    if (success) {
+      refreshBarterListings();
+    }
+    return success;
+  }
+
+  Future<BarterProposal?> submitBarterProposal({
+    required String listingId,
+    required String offeredItems,
+    required String counterMessage,
+  }) async {
+    final proposal = _bridge.submitBarterProposal(
+      listingId: listingId,
+      offeredItems: offeredItems,
+      counterMessage: counterMessage,
+    );
+    if (proposal != null) {
+      refreshProposalsForListing(listingId);
+    }
+    return proposal;
+  }
+
+  void refreshProposalsForListing(String listingId) {
+    _barterProposals[listingId] = _bridge.getProposalsForListing(listingId);
+    notifyListeners();
+  }
+
+  Future<bool> updateProposalStatus(String proposalId, String listingId, String status) async {
+    final success = _bridge.updateProposalStatus(proposalId, listingId, status);
+    if (success) {
+      refreshProposalsForListing(listingId);
+      refreshBarterListings();
+    }
+    return success;
+  }
+
+  Future<CommunityVouch?> submitCommunityVouch({
+    required String targetNodeHash,
+    required int rating,
+    required String reviewComment,
+  }) async {
+    final vouch = _bridge.submitCommunityVouch(
+      targetNodeHash: targetNodeHash,
+      rating: rating,
+      reviewComment: reviewComment,
+    );
+    if (vouch != null) {
+      refreshVouchesForNode(targetNodeHash);
+    }
+    return vouch;
+  }
+
+  void refreshVouchesForNode(String targetNodeHash) {
+    _communityVouches[targetNodeHash] = _bridge.getVouchesForNode(targetNodeHash);
     notifyListeners();
   }
 
