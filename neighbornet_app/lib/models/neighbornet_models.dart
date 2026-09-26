@@ -1300,6 +1300,43 @@ class CommunityVouch {
   }
 }
 
+class WebGatewayStatus {
+  final bool isRunning;
+  final int port;
+  final String localIp;
+  final String gatewayUrl;
+  final int requestsServed;
+
+  WebGatewayStatus({
+    required this.isRunning,
+    required this.port,
+    required this.localIp,
+    required this.gatewayUrl,
+    required this.requestsServed,
+  });
+
+  factory WebGatewayStatus.fromJson(Map<String, dynamic> json) {
+    return WebGatewayStatus(
+      isRunning: json['is_running'] as bool? ?? false,
+      port: (json['port'] as num?)?.toInt() ?? 8080,
+      localIp: json['local_ip'] as String? ?? '127.0.0.1',
+      gatewayUrl: json['gateway_url'] as String? ?? '',
+      requestsServed: (json['requests_served'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'is_running': isRunning,
+      'port': port,
+      'local_ip': localIp,
+      'gateway_url': gatewayUrl,
+      'requests_served': requestsServed,
+    };
+  }
+}
+
+
 
 
 

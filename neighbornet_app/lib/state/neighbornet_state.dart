@@ -53,6 +53,9 @@ class NeighborNetState extends ChangeNotifier {
   LoraRadioStatus? _loraStatus;
   bool _isLoraScanning = false;
 
+  WebGatewayStatus? _webGatewayStatus;
+  int _webGatewayPort = 8080;
+
   bool get isInitialized => _isInitialized;
   AppThemeProfile get themeProfile => _themeProfile;
   NodeStatus? get status => _status;
@@ -79,6 +82,13 @@ class NeighborNetState extends ChangeNotifier {
   LoraRadioStatus? get loraStatus => _loraStatus;
   bool get isLoraScanning => _isLoraScanning;
   PttService get pttService => _pttService;
+
+  WebGatewayStatus? get webGatewayStatus => _webGatewayStatus;
+  bool get isWebGatewayRunning => _webGatewayStatus?.isRunning ?? false;
+  int get webGatewayPort => _webGatewayPort;
+  String get webGatewayUrl => (_webGatewayStatus != null && _webGatewayStatus!.gatewayUrl.isNotEmpty)
+      ? _webGatewayStatus!.gatewayUrl
+      : 'http://127.0.0.1:$_webGatewayPort';
 
 
   List<ChatMessage> get currentMessages => getDisplayMessages(_currentChannel);
@@ -340,6 +350,8 @@ class NeighborNetState extends ChangeNotifier {
     if (lora != null) {
       _loraStatus = lora;
     }
+
+    _webGatewayStatus = _bridge.getWebGatewayStatus();
 
 
     // Check for new bulletins
@@ -986,6 +998,44 @@ class NeighborNetState extends ChangeNotifier {
 
   void refreshVouchesForNode(String targetNodeHash) {
     _communityVouches[targetNodeHash] = _bridge.getVouchesForNode(targetNodeHash);
+    notifyListeners();
+  }
+
+  void setWebGatewayPort(int port) {
+    if (port >= 1 && port <= 65535) {
+      _webGatewayPort = port;
+      notifyListeners();
+    }
+  }
+
+  void startWebGateway([int? port]) {
+    final targetPort = port ?? _webGatewayPort;
+    final res = _bridge.startWebGateway(port: targetPort);
+    if (res != null) {
+      _webGatewayStatus = res;
+      _webGatewayPort = res.port;
+    } else {
+      _webGatewayStatus = _bridge.getWebGatewayStatus();
+    }
+    notifyListeners();
+  }
+
+  void stopWebGateway() {
+    _bridge.stopWebGateway();
+    _webGatewayStatus = _bridge.getWebGatewayStatus();
+    notifyListeners();
+  }
+
+  void toggleWebGateway() {
+    if (isWebGatewayRunning) {
+      stopWebGateway();
+    } else {
+      startWebGateway(_webGatewayPort);
+    }
+  }
+
+  void refreshWebGatewayStatus() {
+    _webGatewayStatus = _bridge.getWebGatewayStatus();
     notifyListeners();
   }
 

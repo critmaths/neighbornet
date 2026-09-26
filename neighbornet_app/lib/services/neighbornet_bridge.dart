@@ -141,6 +141,15 @@ typedef _DartUpdateProposalStatus = bool Function(Pointer<Utf8>, Pointer<Utf8>, 
 typedef _NativeSubmitCommunityVouch = Pointer<Utf8> Function(Pointer<Utf8>, Uint8, Pointer<Utf8>);
 typedef _DartSubmitCommunityVouch = Pointer<Utf8> Function(Pointer<Utf8>, int, Pointer<Utf8>);
 
+typedef _NativeStartWebGateway = Pointer<Utf8> Function(Uint16);
+typedef _DartStartWebGateway = Pointer<Utf8> Function(int);
+
+typedef _NativeStopWebGateway = Bool Function();
+typedef _DartStopWebGateway = bool Function();
+
+typedef _NativeGetWebGatewayStatus = Pointer<Utf8> Function();
+typedef _DartGetWebGatewayStatus = Pointer<Utf8> Function();
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -218,6 +227,10 @@ class NeighborNetBridge {
   late _DartSubmitCommunityVouch _submitCommunityVouch;
   late _DartGetRoomData _getVouchesForNodeJson;
 
+  late _DartStartWebGateway _startWebGateway;
+  late _DartStopWebGateway _stopWebGateway;
+  late _DartGetWebGatewayStatus _getWebGatewayStatusJson;
+
   bool get isReady => _isInitialized;
 
   void _loadLibrary() {
@@ -227,8 +240,10 @@ class NeighborNetBridge {
       if (Platform.environment.containsKey('NEIGHBORNET_CORE_LIB'))
         Platform.environment['NEIGHBORNET_CORE_LIB']!,
       '${File(Platform.resolvedExecutable).parent.path}${Platform.pathSeparator}neighbornet_core.dll',
-      r'C:\Users\criti\RiderProjects\Neighbornet\neighbornet_core\target\release\neighbornet_core.dll',
-      r'C:\Users\criti\RiderProjects\Neighbornet\neighbornet_core\target\debug\neighbornet_core.dll',
+      '..${Platform.pathSeparator}neighbornet_core${Platform.pathSeparator}target${Platform.pathSeparator}release${Platform.pathSeparator}neighbornet_core.dll',
+      '..${Platform.pathSeparator}neighbornet_core${Platform.pathSeparator}target${Platform.pathSeparator}debug${Platform.pathSeparator}neighbornet_core.dll',
+      'neighbornet_core${Platform.pathSeparator}target${Platform.pathSeparator}release${Platform.pathSeparator}neighbornet_core.dll',
+      'neighbornet_core${Platform.pathSeparator}target${Platform.pathSeparator}debug${Platform.pathSeparator}neighbornet_core.dll',
       r'neighbornet_core.dll',
       'libneighbornet_core.dylib',
       'libneighbornet_core.so',
@@ -313,6 +328,10 @@ class NeighborNetBridge {
     _updateProposalStatus = _dylib!.lookupFunction<_NativeUpdateProposalStatus, _DartUpdateProposalStatus>('neighbornet_update_proposal_status');
     _submitCommunityVouch = _dylib!.lookupFunction<_NativeSubmitCommunityVouch, _DartSubmitCommunityVouch>('neighbornet_submit_community_vouch');
     _getVouchesForNodeJson = _dylib!.lookupFunction<_NativeGetRoomData, _DartGetRoomData>('neighbornet_get_vouches_for_node_json');
+
+    _startWebGateway = _dylib!.lookupFunction<_NativeStartWebGateway, _DartStartWebGateway>('neighbornet_start_web_gateway');
+    _stopWebGateway = _dylib!.lookupFunction<_NativeStopWebGateway, _DartStopWebGateway>('neighbornet_stop_web_gateway');
+    _getWebGatewayStatusJson = _dylib!.lookupFunction<_NativeGetWebGatewayStatus, _DartGetWebGatewayStatus>('neighbornet_get_web_gateway_status_json');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -1318,5 +1337,49 @@ class NeighborNetBridge {
       calloc.free(thPtr);
     }
   }
+
+  WebGatewayStatus? startWebGateway({int port = 8080}) {
+    if (!_isInitialized) return null;
+    try {
+      final ptr = _startWebGateway(port);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return WebGatewayStatus.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool stopWebGateway() {
+    if (!_isInitialized) return false;
+    try {
+      return _stopWebGateway();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  WebGatewayStatus? getWebGatewayStatus() {
+    if (!_isInitialized) return null;
+    try {
+      final ptr = _getWebGatewayStatusJson();
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return WebGatewayStatus.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    }
+  }
 }
+
 

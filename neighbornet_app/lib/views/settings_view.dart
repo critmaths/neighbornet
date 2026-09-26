@@ -22,6 +22,7 @@ class _SettingsViewState extends State<SettingsView> {
   late TextEditingController _contactCtrl;
   late TextEditingController _bioCtrl;
   late TextEditingController _customSkillCtrl;
+  late TextEditingController _webGatewayPortCtrl;
   List<String> _selectedSkills = [];
   String _selectedAvatar = 'default';
 
@@ -40,6 +41,7 @@ class _SettingsViewState extends State<SettingsView> {
     _contactCtrl = TextEditingController(text: prof?.contactInfo ?? '');
     _bioCtrl = TextEditingController(text: prof?.bio ?? '');
     _customSkillCtrl = TextEditingController();
+    _webGatewayPortCtrl = TextEditingController(text: widget.state.webGatewayPort.toString());
     _selectedSkills = List.from(prof?.skills ?? []);
     _selectedAvatar = (prof?.avatarBase64.isNotEmpty == true) ? prof!.avatarBase64 : 'default';
 
@@ -47,6 +49,7 @@ class _SettingsViewState extends State<SettingsView> {
       if (mounted) {
         widget.state.refreshSerialPorts();
         widget.state.refreshMyProfile();
+        widget.state.refreshWebGatewayStatus();
       }
     });
   }
@@ -59,6 +62,7 @@ class _SettingsViewState extends State<SettingsView> {
     _contactCtrl.dispose();
     _bioCtrl.dispose();
     _customSkillCtrl.dispose();
+    _webGatewayPortCtrl.dispose();
     super.dispose();
   }
 
@@ -931,6 +935,135 @@ class _SettingsViewState extends State<SettingsView> {
                 ),
               );
             },
+          ),
+
+          const SizedBox(height: 20),
+
+          // Zero-Install Web Gateway & Captive Portal Card
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.wifi_tethering_rounded,
+                            color: widget.state.isWebGatewayRunning ? Colors.greenAccent : Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Zero-Install Web Gateway & Captive Portal',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: widget.state.isWebGatewayRunning
+                              ? Colors.green.withValues(alpha: 0.2)
+                              : Colors.grey.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: widget.state.isWebGatewayRunning ? Colors.greenAccent : Colors.grey,
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: widget.state.isWebGatewayRunning ? Colors.greenAccent : Colors.grey,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              widget.state.isWebGatewayRunning ? 'PORTAL ACTIVE' : 'PORTAL STOPPED',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: widget.state.isWebGatewayRunning ? Colors.greenAccent : Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Allows neighborhood residents without NeighborNet installed to join mesh communications through any web browser. Captive Portal Probe Interception redirects iOS, Android, and Windows devices automatically.',
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 140,
+                        child: TextField(
+                          controller: _webGatewayPortCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'HTTP Port',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (val) {
+                            final p = int.tryParse(val);
+                            if (p != null) {
+                              widget.state.setWebGatewayPort(p);
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        icon: Icon(widget.state.isWebGatewayRunning ? Icons.stop_rounded : Icons.play_arrow_rounded),
+                        label: Text(widget.state.isWebGatewayRunning ? 'Stop Gateway' : 'Start Web Gateway'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: widget.state.isWebGatewayRunning ? Colors.redAccent : null,
+                        ),
+                        onPressed: () {
+                          final p = int.tryParse(_webGatewayPortCtrl.text) ?? 8080;
+                          if (widget.state.isWebGatewayRunning) {
+                            widget.state.stopWebGateway();
+                          } else {
+                            widget.state.startWebGateway(p);
+                          }
+                        },
+                      ),
+                      if (widget.state.isWebGatewayRunning) ...[
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.copy_rounded, size: 16),
+                          label: Text(widget.state.webGatewayUrl),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: widget.state.webGatewayUrl));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Web Gateway URL copied to clipboard!')),
+                            );
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
 
           const SizedBox(height: 20),
