@@ -1,7 +1,8 @@
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -66,14 +67,98 @@ pub struct LoraStatusReport {
 
 pub type PacketCallback = Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>;
 
+/// Bidirectional in-memory mock serial port for testing, loopback verification,
+/// and virtual radio simulation without requiring physical hardware.
+#[derive(Clone)]
+pub struct MockSerialPort {
+    rx: Arc<Mutex<VecDeque<u8>>>,
+    tx: Arc<Mutex<VecDeque<u8>>>,
+}
+
+impl MockSerialPort {
+    /// Creates a connected pair of mock serial ports.
+    /// Data written to one end is instantly readable on the other end.
+    pub fn pair() -> (Self, Self) {
+        let q1 = Arc::new(Mutex::new(VecDeque::new()));
+        let q2 = Arc::new(Mutex::new(VecDeque::new()));
+        (
+            Self {
+                rx: q1.clone(),
+                tx: q2.clone(),
+            },
+            Self {
+                rx: q2,
+                tx: q1,
+            },
+        )
+    }
+
+    /// Read all currently buffered bytes from this port's RX queue.
+    pub fn read_available(&self) -> Vec<u8> {
+        let mut q = self.rx.lock().unwrap();
+        q.drain(..).collect()
+    }
+
+    /// Write raw bytes directly into this port's TX queue (to be read by peer).
+    pub fn write_bytes(&self, bytes: &[u8]) {
+        let mut q = self.tx.lock().unwrap();
+        q.extend(bytes);
+    }
+
+    /// Read and decode complete KISS frames available in this port's RX queue.
+    pub fn read_kiss_frames(&self) -> Vec<(u8, Vec<u8>)> {
+        let raw = self.read_available();
+        let mut decoder = KissDecoder::new();
+        let mut frames = Vec::new();
+        for b in raw {
+            if let Some(frame) = decoder.feed_byte(b) {
+                frames.push(frame);
+            }
+        }
+        frames
+    }
+
+    /// Encode and write a KISS frame to the peer.
+    pub fn write_kiss_frame(&self, command: u8, payload: &[u8]) {
+        let frame = encode_kiss_frame(command, payload);
+        self.write_bytes(&frame);
+    }
+}
+
+impl Read for MockSerialPort {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut queue = self.rx.lock().unwrap();
+        if queue.is_empty() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"));
+        }
+        let to_read = buf.len().min(queue.len());
+        for i in 0..to_read {
+            buf[i] = queue.pop_front().unwrap();
+        }
+        Ok(to_read)
+    }
+}
+
+impl Write for MockSerialPort {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut queue = self.tx.lock().unwrap();
+        queue.extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 pub struct LoraManager {
     pub config: RwLock<LoraConfig>,
-    pub is_connected: AtomicBool,
-    pub tx_packets: AtomicU64,
-    pub rx_packets: AtomicU64,
-    pub last_rssi: AtomicI32,
-    pub last_snr: AtomicI32,
-    pub last_activity_sec: AtomicU64,
+    pub is_connected: Arc<AtomicBool>,
+    pub tx_packets: Arc<AtomicU64>,
+    pub rx_packets: Arc<AtomicU64>,
+    pub last_rssi: Arc<AtomicI32>,
+    pub last_snr: Arc<AtomicI32>,
+    pub last_activity_sec: Arc<AtomicU64>,
     pub tx_sender: RwLock<Option<Sender<Vec<u8>>>>,
     pub shutdown_flag: Arc<AtomicBool>,
     pub callback: RwLock<Option<PacketCallback>>,
@@ -96,12 +181,12 @@ impl LoraManager {
     pub fn new() -> Self {
         Self {
             config: RwLock::new(LoraConfig::default()),
-            is_connected: AtomicBool::new(false),
-            tx_packets: AtomicU64::new(0),
-            rx_packets: AtomicU64::new(0),
-            last_rssi: AtomicI32::new(-95), // Default nominal baseline
-            last_snr: AtomicI32::new(6),
-            last_activity_sec: AtomicU64::new(0),
+            is_connected: Arc::new(AtomicBool::new(false)),
+            tx_packets: Arc::new(AtomicU64::new(0)),
+            rx_packets: Arc::new(AtomicU64::new(0)),
+            last_rssi: Arc::new(AtomicI32::new(-95)), // Default nominal baseline
+            last_snr: Arc::new(AtomicI32::new(6)),
+            last_activity_sec: Arc::new(AtomicU64::new(0)),
             tx_sender: RwLock::new(None),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             callback: RwLock::new(None),
@@ -148,70 +233,49 @@ impl LoraManager {
         devices
     }
 
-    pub fn connect(
+    /// Connects using an arbitrary stream implementing `Read + Write + Send + 'static`.
+    /// Used for both physical serial ports and mock/loopback simulation.
+    pub fn connect_stream<S: Read + Write + Send + 'static>(
         &self,
-        port_name: &str,
-        baud_rate: u32,
-        freq_hz: u32,
-        bw_hz: u32,
-        sf: u8,
-        cr: u8,
+        stream: S,
+        config: LoraConfig,
     ) -> Result<(), String> {
         self.disconnect();
 
-        let baud = if baud_rate == 0 { 115200 } else { baud_rate };
-        let port = serialport::new(port_name, baud)
-            .timeout(Duration::from_millis(50))
-            .open()
-            .map_err(|e| format!("Failed to open serial port '{port_name}': {e}"))?;
-
-        let new_config = LoraConfig {
-            port_name: port_name.to_string(),
-            baud_rate: baud,
-            freq_hz: if freq_hz == 0 { 915_000_000 } else { freq_hz },
-            bw_hz: if bw_hz == 0 { 125_000 } else { bw_hz },
-            sf: if sf == 0 { 10 } else { sf },
-            cr: if cr == 0 { 5 } else { cr },
-            tx_power: 17,
-        };
-        *self.config.write() = new_config.clone();
+        *self.config.write() = config.clone();
 
         let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
         *self.tx_sender.write() = Some(tx);
 
-        let shutdown = Arc::new(AtomicBool::new(false));
         self.shutdown_flag.store(false, Ordering::SeqCst);
-        let thread_shutdown = shutdown.clone();
+        let thread_shutdown = self.shutdown_flag.clone();
+        let is_conn_thread = self.is_connected.clone();
 
         let callback_clone = self.callback.read().clone();
-        let tx_counter = Arc::new(AtomicU64::new(self.tx_packets.load(Ordering::Relaxed)));
-        let rx_counter = Arc::new(AtomicU64::new(self.rx_packets.load(Ordering::Relaxed)));
-        let last_rssi_ref = Arc::new(AtomicI32::new(-95));
-        let last_snr_ref = Arc::new(AtomicI32::new(6));
-        let last_act_ref = Arc::new(AtomicU64::new(current_epoch_sec()));
+        let tx_counter = self.tx_packets.clone();
+        let rx_counter = self.rx_packets.clone();
+        let rssi_thread = self.last_rssi.clone();
+        let snr_thread = self.last_snr.clone();
+        let act_thread = self.last_activity_sec.clone();
 
-        let tx_c_thread = tx_counter.clone();
-        let rx_c_thread = rx_counter.clone();
-        let rssi_thread = last_rssi_ref.clone();
-        let snr_thread = last_snr_ref.clone();
-        let act_thread = last_act_ref.clone();
+        let cfg = config.clone();
 
         let _thread_handle = thread::Builder::new()
             .name("lora-serial-io".to_string())
             .spawn(move || {
-                let mut serial = port;
+                let mut serial = stream;
                 let mut decoder = KissDecoder::new();
 
                 // Send radio configuration frames
-                let freq_bytes = new_config.freq_hz.to_be_bytes();
+                let freq_bytes = cfg.freq_hz.to_be_bytes();
                 let _ = serial.write_all(&encode_kiss_frame(CMD_FREQUENCY, &freq_bytes));
 
-                let bw_bytes = new_config.bw_hz.to_be_bytes();
+                let bw_bytes = cfg.bw_hz.to_be_bytes();
                 let _ = serial.write_all(&encode_kiss_frame(CMD_BANDWIDTH, &bw_bytes));
 
-                let _ = serial.write_all(&encode_kiss_frame(CMD_SF, &[new_config.sf]));
-                let _ = serial.write_all(&encode_kiss_frame(CMD_CR, &[new_config.cr]));
-                let _ = serial.write_all(&encode_kiss_frame(CMD_TXPOWER, &[new_config.tx_power]));
+                let _ = serial.write_all(&encode_kiss_frame(CMD_SF, &[cfg.sf]));
+                let _ = serial.write_all(&encode_kiss_frame(CMD_CR, &[cfg.cr]));
+                let _ = serial.write_all(&encode_kiss_frame(CMD_TXPOWER, &[cfg.tx_power]));
                 let _ = serial.flush();
 
                 let mut read_buf = [0u8; 512];
@@ -225,7 +289,7 @@ impl LoraManager {
                                     act_thread.store(current_epoch_sec(), Ordering::Relaxed);
                                     match cmd {
                                         CMD_DATA => {
-                                            rx_c_thread.fetch_add(1, Ordering::Relaxed);
+                                            rx_counter.fetch_add(1, Ordering::Relaxed);
                                             if let Some(ref cb) = callback_clone {
                                                 cb(payload);
                                             }
@@ -244,7 +308,7 @@ impl LoraManager {
                         Ok(_) => {}
                         Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
                         Err(_) => {
-                            thread::sleep(Duration::from_millis(20));
+                            thread::sleep(Duration::from_millis(10));
                         }
                     }
 
@@ -253,17 +317,57 @@ impl LoraManager {
                         let frame = encode_kiss_frame(CMD_DATA, &outgoing_payload);
                         if serial.write_all(&frame).is_ok() {
                             let _ = serial.flush();
-                            tx_c_thread.fetch_add(1, Ordering::Relaxed);
+                            tx_counter.fetch_add(1, Ordering::Relaxed);
                             act_thread.store(current_epoch_sec(), Ordering::Relaxed);
                         }
                     }
 
                     thread::sleep(Duration::from_millis(5));
                 }
-            });
+
+                is_conn_thread.store(false, Ordering::SeqCst);
+            })
+            .map_err(|e| format!("Failed to spawn lora thread: {e}"))?;
 
         self.is_connected.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Connects to a physical serial port.
+    pub fn connect(
+        &self,
+        port_name: &str,
+        baud_rate: u32,
+        freq_hz: u32,
+        bw_hz: u32,
+        sf: u8,
+        cr: u8,
+    ) -> Result<(), String> {
+        let baud = if baud_rate == 0 { 115200 } else { baud_rate };
+        let port = serialport::new(port_name, baud)
+            .timeout(Duration::from_millis(50))
+            .open()
+            .map_err(|e| format!("Failed to open serial port '{port_name}': {e}"))?;
+
+        let new_config = LoraConfig {
+            port_name: port_name.to_string(),
+            baud_rate: baud,
+            freq_hz: if freq_hz == 0 { 915_000_000 } else { freq_hz },
+            bw_hz: if bw_hz == 0 { 125_000 } else { bw_hz },
+            sf: if sf == 0 { 10 } else { sf },
+            cr: if cr == 0 { 5 } else { cr },
+            tx_power: 17,
+        };
+
+        self.connect_stream(port, new_config)
+    }
+
+    /// Connects to a mock duplex channel for automated loopback testing and simulation.
+    /// Returns the peer MockSerialPort, which behaves as the radio hardware.
+    pub fn connect_mock_loopback(&self, config: LoraConfig) -> Result<MockSerialPort, String> {
+        let (port, peer) = MockSerialPort::pair();
+        self.connect_stream(port, config)?;
+        Ok(peer)
     }
 
     pub fn disconnect(&self) {
@@ -279,8 +383,6 @@ impl LoraManager {
 
         if let Some(ref sender) = *self.tx_sender.read() {
             if sender.send(payload.to_vec()).is_ok() {
-                self.tx_packets.fetch_add(1, Ordering::Relaxed);
-                self.last_activity_sec.store(current_epoch_sec(), Ordering::Relaxed);
                 return true;
             }
         }
@@ -305,3 +407,4 @@ impl LoraManager {
         }
     }
 }
+

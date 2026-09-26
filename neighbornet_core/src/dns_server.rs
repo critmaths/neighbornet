@@ -60,8 +60,8 @@ impl DnsServer {
                 match socket.recv_from(&mut buf) {
                     Ok((amt, src)) => {
                         if let Some(resp) = build_dns_response(&buf[..amt], target_ip) {
-                            let _ = socket.send_to(&resp, src);
                             counter.fetch_add(1, Ordering::SeqCst);
+                            let _ = socket.send_to(&resp, src);
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
@@ -314,7 +314,14 @@ mod tests {
         assert!(len > 12);
         assert_eq!(&recv_buf[len - 4..len], &[10, 42, 0, 1]);
 
-        let final_status = server.status();
+        let mut final_status = server.status();
+        for _ in 0..20 {
+            if final_status.queries_answered >= 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+            final_status = server.status();
+        }
         assert!(final_status.queries_answered >= 1);
 
         server.stop();
