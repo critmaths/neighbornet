@@ -1,0 +1,59 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-rust-core:
+    name: Rust Core Engine Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Core Unit & Integration Tests
+        run: cargo test --verbose
+        working-directory: neighbornet_core
+
+  test-flutter-app:
+    name: Flutter Desktop Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Native FFI Core DLL
+        run: cargo build
+        working-directory: neighbornet_core
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Fetch Flutter Dependencies
+        run: flutter pub get
+        working-directory: neighbornet_app
+
+      - name: Copy Core DLL for Flutter Tests
+        shell: pwsh
+        run: |
+          Copy-Item neighbornet_core/target/debug/neighbornet_core.dll neighbornet_app/ -Force
+
+      - name: Run Flutter Widget & Unit Tests
+        run: flutter test
+        working-directory: neighbornet_app

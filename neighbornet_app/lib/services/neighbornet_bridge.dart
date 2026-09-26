@@ -237,6 +237,7 @@ class NeighborNetBridge {
     if (_dylib != null) return;
 
     final candidatePaths = <String>[
+      if (Platform.isAndroid) 'libneighbornet_core.so',
       if (Platform.environment.containsKey('NEIGHBORNET_CORE_LIB'))
         Platform.environment['NEIGHBORNET_CORE_LIB']!,
       '${File(Platform.resolvedExecutable).parent.path}${Platform.pathSeparator}neighbornet_core.dll',

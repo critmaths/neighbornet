@@ -2,10 +2,7 @@ name: Multi-Platform CI & Release
 
 on:
   push:
-    branches: [ master ]
     tags: [ 'v*' ]
-  pull_request:
-    branches: [ master ]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +10,7 @@ permissions:
 
 jobs:
   # ============================================================================
-  # 1. WINDOWS X64 BUILD (Desktop App + Rust Core DLL)
+  # 1. WINDOWS X64 BUILD (Desktop App + Headless Daemon + Installer)
   # ============================================================================
   build-windows:
     name: Build Windows x64
@@ -25,13 +22,73 @@ jobs:
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust Core Tests
-        run: cargo test --verbose
-        working-directory: neighbornet_core
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-      - name: Compile Rust Core DLL (Release)
-        run: cargo build --release
+      - name: Setup Inno Setup
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          version: '6.2.2'
+
+      - name: Run Windows Release Packaging Script
+        shell: pwsh
+        run: |
+          .\scripts\package_windows_release.ps1
+
+      - name: Upload Windows Portable Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeighborNet-Windows-x64-Portable
+          path: dist/NeighborNet_v*.zip
+
+      - name: Upload Windows Setup Installer
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: NeighborNet-Windows-x64-Setup
+          path: dist/NeighborNet_Setup_*.exe
+
+  # ============================================================================
+  # 2. ANDROID BUILD (Universal APK + Split ABI APKs + Rust NDK Core)
+  # ============================================================================
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          echo "y" | sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      - name: Setup Rust Toolchain & Android Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Rust Core Libraries for Android
         working-directory: neighbornet_core
+        run: |
+          mkdir -p ../neighbornet_app/android/app/src/main/jniLibs
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../neighbornet_app/android/app/src/main/jniLibs build --release
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -39,40 +96,39 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Flutter Dependencies
+      - name: Fetch Flutter Dependencies
+        working-directory: neighbornet_app
         run: flutter pub get
+
+      - name: Build Universal Release APK
         working-directory: neighbornet_app
+        run: flutter build apk --release
 
-      - name: Copy Rust DLL for Flutter Tests
-        shell: pwsh
-        run: Copy-Item neighbornet_core/target/release/neighbornet_core.dll neighbornet_app/ -Force
-
-      - name: Flutter Unit & Widget Tests
-        run: flutter test
+      - name: Build Split-per-ABI Release APKs
         working-directory: neighbornet_app
+        run: flutter build apk --release --split-per-abi
 
-      - name: Build Flutter Windows Desktop (Release)
-        run: flutter build windows --release
-        working-directory: neighbornet_app
-
-      - name: Package Windows Release Archive
-        shell: pwsh
+      - name: Stage Android Artifacts
         run: |
-          New-Item -ItemType Directory -Force -Path dist/NeighborNet-Windows-x64
-          Copy-Item -Recurse -Force neighbornet_app/build/windows/x64/runner/Release/* dist/NeighborNet-Windows-x64/
-          Copy-Item -Force neighbornet_core/target/release/neighbornet_core.dll dist/NeighborNet-Windows-x64/
-          Copy-Item -Force COLLAPSE_SURVIVAL_MANUAL.md dist/NeighborNet-Windows-x64/
-          Copy-Item -Force README.md dist/NeighborNet-Windows-x64/
-          Compress-Archive -Path dist/NeighborNet-Windows-x64/* -DestinationPath dist/NeighborNet-Windows-x64.zip -Force
+          mkdir -p dist
+          cp neighbornet_app/build/app/outputs/flutter-apk/app-release.apk dist/NeighborNet-Android-Universal.apk
+          cp neighbornet_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/NeighborNet-Android-arm64-v8a.apk || true
+          cp neighbornet_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/NeighborNet-Android-armeabi-v7a.apk || true
 
-      - name: Upload Windows Artifact
+      - name: Upload Android Universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: NeighborNet-Windows-x64
-          path: dist/NeighborNet-Windows-x64.zip
+          name: NeighborNet-Android-Universal-APK
+          path: dist/NeighborNet-Android-Universal.apk
+
+      - name: Upload Android ARM64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeighborNet-Android-arm64-v8a-APK
+          path: dist/NeighborNet-Android-arm64-v8a.apk
 
   # ============================================================================
-  # 2. LINUX X64 BUILD (Desktop App + Headless Relay Node)
+  # 3. LINUX X64 BUILD (Desktop App + Headless Relay Node)
   # ============================================================================
   build-linux:
     name: Build Linux x64
@@ -120,7 +176,7 @@ jobs:
           cp -r neighbornet_app/build/linux/x64/release/bundle/* dist/NeighborNet-Linux-x64/ || true
           cp neighbornet_core/target/release/neighbornet_node dist/NeighborNet-Linux-x64/
           cp -r scripts dist/NeighborNet-Linux-x64/
-          cp Dockerfile docker-compose.yml COLLAPSE_SURVIVAL_MANUAL.md README.md dist/NeighborNet-Linux-x64/
+          cp README.md dist/NeighborNet-Linux-x64/
           tar -czvf dist/NeighborNet-Linux-x64.tar.gz -C dist/NeighborNet-Linux-x64 .
 
       - name: Upload Linux Artifact
@@ -130,7 +186,7 @@ jobs:
           path: dist/NeighborNet-Linux-x64.tar.gz
 
   # ============================================================================
-  # 3. RASPBERRY PI / LINUX ARM64 BUILD (Headless Solar Relay Node)
+  # 4. RASPBERRY PI / LINUX ARM64 BUILD (Headless Solar Relay Node)
   # ============================================================================
   build-rpi-arm64:
     name: Build Raspberry Pi ARM64 Relay
@@ -161,7 +217,7 @@ jobs:
           mkdir -p dist/NeighborNet-Relay-RaspberryPi-arm64
           cp neighbornet_core/target/aarch64-unknown-linux-gnu/release/neighbornet_node dist/NeighborNet-Relay-RaspberryPi-arm64/
           cp -r scripts dist/NeighborNet-Relay-RaspberryPi-arm64/
-          cp Dockerfile docker-compose.yml COLLAPSE_SURVIVAL_MANUAL.md README.md dist/NeighborNet-Relay-RaspberryPi-arm64/
+          cp README.md dist/NeighborNet-Relay-RaspberryPi-arm64/
           tar -czvf dist/NeighborNet-Relay-RaspberryPi-arm64.tar.gz -C dist/NeighborNet-Relay-RaspberryPi-arm64 .
 
       - name: Upload Raspberry Pi ARM64 Artifact
@@ -171,96 +227,35 @@ jobs:
           path: dist/NeighborNet-Relay-RaspberryPi-arm64.tar.gz
 
   # ============================================================================
-  # 4. MACOS UNIVERSAL BUILD (Desktop App + Rust Core dylib)
-  # ============================================================================
-  build-macos:
-    name: Build macOS Desktop
-    runs-on: macos-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Core Tests & Build
-        run: |
-          cargo test --verbose
-          cargo build --release
-        working-directory: neighbornet_core
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
-
-      - name: Flutter Dependencies & Tests
-        run: |
-          cp neighbornet_core/target/release/libneighbornet_core.dylib neighbornet_app/
-          sudo cp neighbornet_core/target/release/libneighbornet_core.dylib /usr/local/lib/ || true
-          cd neighbornet_app
-          flutter pub get
-          flutter test
-
-      - name: Build Flutter macOS Desktop (Release)
-        run: flutter build macos --release
-        working-directory: neighbornet_app
-
-      - name: Package macOS Release Archive
-        run: |
-          mkdir -p dist/NeighborNet-macOS
-          cp -r neighbornet_app/build/macos/Build/Products/Release/NeighborNet.app dist/NeighborNet-macOS/ || true
-          cp neighbornet_core/target/release/libneighbornet_core.dylib dist/NeighborNet-macOS/ || true
-          cp COLLAPSE_SURVIVAL_MANUAL.md README.md dist/NeighborNet-macOS/
-          ditto -c -k --sequesterRsrc --keepParent dist/NeighborNet-macOS dist/NeighborNet-macOS.zip
-
-      - name: Upload macOS Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: NeighborNet-macOS
-          path: dist/NeighborNet-macOS.zip
-
-  # ============================================================================
   # 5. GITHUB RELEASES PUBLISHER
   # ============================================================================
   publish-release:
     name: Publish Multi-Platform Release
-    needs: [build-windows, build-linux, build-rpi-arm64, build-macos]
+    needs: [build-windows, build-android, build-linux, build-rpi-arm64]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download Windows Artifact
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: NeighborNet-Windows-x64
-          path: release-artifacts
+          path: release-downloads
 
-      - name: Download Linux Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: NeighborNet-Linux-x64
-          path: release-artifacts
-
-      - name: Download Raspberry Pi ARM64 Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: NeighborNet-Relay-RaspberryPi-arm64
-          path: release-artifacts
-
-      - name: Download macOS Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: NeighborNet-macOS
-          path: release-artifacts
+      - name: Consolidate Release Assets & Generate Checksums
+        run: |
+          mkdir -p release-assets
+          find release-downloads -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.apk" -o -name "*.exe" \) -exec cp {} release-assets/ \;
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          echo "Prepared release assets:"
+          ls -lh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/*
+          files: release-assets/*
           generate_release_notes: true
           draft: false
           prerelease: false
