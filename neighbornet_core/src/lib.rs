@@ -2,6 +2,9 @@
 
 pub mod kiss;
 pub mod lora;
+pub mod web_gateway;
+
+pub use web_gateway::{WebGateway, WebGatewayStatus};
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
@@ -438,9 +441,10 @@ pub struct NodeInner {
     pub start_time: Instant,
     pub socket: UdpSocket,
     pub lora_manager: Arc<lora::LoraManager>,
+    pub web_gateway: parking_lot::Mutex<WebGateway>,
 }
 
-
+#[derive(Clone)]
 pub struct NeighborNode {
     pub inner: Arc<NodeInner>,
 }
@@ -1402,6 +1406,7 @@ impl NeighborNode {
             start_time: Instant::now(),
             socket: socket_clone,
             lora_manager: lora_mgr,
+            web_gateway: parking_lot::Mutex::new(WebGateway::new()),
         });
 
         // Set LoRa packet reception callback
@@ -1422,6 +1427,19 @@ impl NeighborNode {
 
     pub fn stop(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
+        self.inner.web_gateway.lock().stop();
+    }
+
+    pub fn start_web_gateway(&self, port: u16) -> Result<WebGatewayStatus, String> {
+        self.inner.web_gateway.lock().start(port, self.clone())
+    }
+
+    pub fn stop_web_gateway(&self) {
+        self.inner.web_gateway.lock().stop();
+    }
+
+    pub fn get_web_gateway_status(&self) -> WebGatewayStatus {
+        self.inner.web_gateway.lock().status()
     }
 
     pub fn get_status(&self) -> NodeStatus {
@@ -5226,7 +5244,7 @@ pub extern "C" fn neighbornet_simulate_trace(target_hash_c: *const c_char) -> *m
     }
 }
 
-// --- BARTER & COMMUNITY VOUCH FFI EXPORTS ---
+// --- BARTER MARKETPLACE & REPUTATION FFI EXPORTS ---
 
 #[no_mangle]
 pub extern "C" fn neighbornet_create_barter_listing(
@@ -5456,6 +5474,58 @@ pub extern "C" fn neighbornet_get_vouches_for_node_json(target_node_hash_c: *con
 
     let list = node.get_vouches_for_node(&target_node_hash);
     let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+    to_c_string(json)
+}
+
+// --- WEB GATEWAY & CAPTIVE PORTAL FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_start_web_gateway(port: u16) -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    match node.start_web_gateway(port) {
+        Ok(status) => {
+            let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_stop_web_gateway() -> bool {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.stop_web_gateway();
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_web_gateway_status_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => {
+            return to_c_string(
+                "{\"is_running\":false,\"port\":0,\"local_ip\":\"\",\"gateway_url\":\"\",\"requests_served\":0}"
+                    .to_string(),
+            )
+        }
+    };
+
+    let status = node.get_web_gateway_status();
+    let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
     to_c_string(json)
 }
 
