@@ -23,6 +23,7 @@ class _SettingsViewState extends State<SettingsView> {
   late TextEditingController _bioCtrl;
   late TextEditingController _customSkillCtrl;
   late TextEditingController _webGatewayPortCtrl;
+  late TextEditingController _dnsPortCtrl;
   List<String> _selectedSkills = [];
   String _selectedAvatar = 'default';
 
@@ -42,6 +43,7 @@ class _SettingsViewState extends State<SettingsView> {
     _bioCtrl = TextEditingController(text: prof?.bio ?? '');
     _customSkillCtrl = TextEditingController();
     _webGatewayPortCtrl = TextEditingController(text: widget.state.webGatewayPort.toString());
+    _dnsPortCtrl = TextEditingController(text: widget.state.dnsServerPort.toString());
     _selectedSkills = List.from(prof?.skills ?? []);
     _selectedAvatar = (prof?.avatarBase64.isNotEmpty == true) ? prof!.avatarBase64 : 'default';
 
@@ -50,6 +52,7 @@ class _SettingsViewState extends State<SettingsView> {
         widget.state.refreshSerialPorts();
         widget.state.refreshMyProfile();
         widget.state.refreshWebGatewayStatus();
+        widget.state.refreshDnsServerStatus();
       }
     });
   }
@@ -63,6 +66,7 @@ class _SettingsViewState extends State<SettingsView> {
     _bioCtrl.dispose();
     _customSkillCtrl.dispose();
     _webGatewayPortCtrl.dispose();
+    _dnsPortCtrl.dispose();
     super.dispose();
   }
 
@@ -1061,6 +1065,115 @@ class _SettingsViewState extends State<SettingsView> {
                       ],
                     ],
                   ),
+
+                  const Divider(height: 32),
+
+                  // Captive DNS Redirection Section
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.dns_rounded,
+                            color: widget.state.isDnsServerRunning ? Colors.cyanAccent : Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Hotspot Captive DNS Auto-Redirect',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: widget.state.isDnsServerRunning
+                              ? Colors.cyan.withValues(alpha: 0.2)
+                              : Colors.grey.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: widget.state.isDnsServerRunning ? Colors.cyanAccent : Colors.grey,
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: widget.state.isDnsServerRunning ? Colors.cyanAccent : Colors.grey,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              widget.state.isDnsServerRunning ? 'DNS ACTIVE' : 'DNS STOPPED',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: widget.state.isDnsServerRunning ? Colors.cyanAccent : Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Embedded RFC 1035 UDP DNS server that redirects all domain queries (* -> ${widget.state.dnsTargetIp}) on field Wi-Fi hotspots, prompting iOS, Android, and Windows devices to open the NeighborNet portal automatically.',
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 140,
+                        child: TextField(
+                          controller: _dnsPortCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'UDP DNS Port',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (val) {
+                            final p = int.tryParse(val);
+                            if (p != null) {
+                              widget.state.setDnsServerPort(p);
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        icon: Icon(widget.state.isDnsServerRunning ? Icons.stop_rounded : Icons.play_arrow_rounded),
+                        label: Text(widget.state.isDnsServerRunning ? 'Stop DNS' : 'Start DNS Redirect'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: widget.state.isDnsServerRunning ? Colors.redAccent : Colors.cyan.shade800,
+                        ),
+                        onPressed: () {
+                          final p = int.tryParse(_dnsPortCtrl.text) ?? 53;
+                          if (widget.state.isDnsServerRunning) {
+                            widget.state.stopDnsServer();
+                          } else {
+                            widget.state.startDnsServer(port: p);
+                          }
+                        },
+                      ),
+                      if (widget.state.isDnsServerRunning) ...[
+                        const SizedBox(width: 12),
+                        Chip(
+                          avatar: const Icon(Icons.check_circle_outline_rounded, size: 16, color: Colors.cyanAccent),
+                          label: Text('Answered: ${widget.state.dnsServerStatus?.queriesAnswered ?? 0} queries'),
+                        ),
+                      ],
+                    ],
+                  ),
+
                 ],
               ),
             ),

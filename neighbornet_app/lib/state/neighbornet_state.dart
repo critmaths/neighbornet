@@ -56,6 +56,10 @@ class NeighborNetState extends ChangeNotifier {
   WebGatewayStatus? _webGatewayStatus;
   int _webGatewayPort = 8080;
 
+  DnsServerStatus? _dnsServerStatus;
+  int _dnsServerPort = 53;
+  String? _dnsTargetIp;
+
   bool get isInitialized => _isInitialized;
   AppThemeProfile get themeProfile => _themeProfile;
   NodeStatus? get status => _status;
@@ -89,6 +93,12 @@ class NeighborNetState extends ChangeNotifier {
   String get webGatewayUrl => (_webGatewayStatus != null && _webGatewayStatus!.gatewayUrl.isNotEmpty)
       ? _webGatewayStatus!.gatewayUrl
       : 'http://127.0.0.1:$_webGatewayPort';
+
+  DnsServerStatus? get dnsServerStatus => _dnsServerStatus;
+  bool get isDnsServerRunning => _dnsServerStatus?.isRunning ?? false;
+  int get dnsServerPort => _dnsServerPort;
+  String get dnsTargetIp => _dnsServerStatus?.targetIp ?? _dnsTargetIp ?? (_webGatewayStatus?.localIp ?? '127.0.0.1');
+
 
 
   List<ChatMessage> get currentMessages => getDisplayMessages(_currentChannel);
@@ -352,6 +362,7 @@ class NeighborNetState extends ChangeNotifier {
     }
 
     _webGatewayStatus = _bridge.getWebGatewayStatus();
+    _dnsServerStatus = _bridge.getDnsServerStatus();
 
 
     // Check for new bulletins
@@ -1036,6 +1047,49 @@ class NeighborNetState extends ChangeNotifier {
 
   void refreshWebGatewayStatus() {
     _webGatewayStatus = _bridge.getWebGatewayStatus();
+    notifyListeners();
+  }
+
+  void setDnsServerPort(int port) {
+    if (port >= 1 && port <= 65535) {
+      _dnsServerPort = port;
+      notifyListeners();
+    }
+  }
+
+  void setDnsTargetIp(String ip) {
+    _dnsTargetIp = ip.trim();
+    notifyListeners();
+  }
+
+  void startDnsServer({int? port, String? targetIp}) {
+    final targetPort = port ?? _dnsServerPort;
+    final res = _bridge.startDnsServer(port: targetPort, targetIp: targetIp ?? _dnsTargetIp);
+    if (res != null) {
+      _dnsServerStatus = res;
+      _dnsServerPort = res.port;
+    } else {
+      _dnsServerStatus = _bridge.getDnsServerStatus();
+    }
+    notifyListeners();
+  }
+
+  void stopDnsServer() {
+    _bridge.stopDnsServer();
+    _dnsServerStatus = _bridge.getDnsServerStatus();
+    notifyListeners();
+  }
+
+  void toggleDnsServer() {
+    if (isDnsServerRunning) {
+      stopDnsServer();
+    } else {
+      startDnsServer(port: _dnsServerPort);
+    }
+  }
+
+  void refreshDnsServerStatus() {
+    _dnsServerStatus = _bridge.getDnsServerStatus();
     notifyListeners();
   }
 

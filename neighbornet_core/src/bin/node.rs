@@ -13,6 +13,8 @@ fn print_usage() {
     println!("  -n, --nickname <NAME>    Display nickname on mesh (default: HubNode-<port>)");
     println!("  -d, --data-dir <PATH>    Data directory for SQLite db and keys (default: ./data_node_<port>)");
     println!("  -t, --transport          Enable Community Transport Relay & Routing Mode");
+    println!("  -w, --web-gateway [PORT] Start zero-install Web Gateway (default: 8080)");
+    println!("  -z, --dns-redirect [PORT] Start Captive Portal DNS redirection server (default: 53)");
     println!("  -h, --help               Print this help message");
 }
 
@@ -28,6 +30,8 @@ fn main() {
     let mut nickname: Option<String> = None;
     let mut data_dir: Option<PathBuf> = None;
     let mut is_transport = false;
+    let mut web_gateway_port: Option<u16> = None;
+    let mut dns_redirect_port: Option<u16> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -52,6 +56,22 @@ fn main() {
             }
             "-t" | "--transport" => {
                 is_transport = true;
+            }
+            "-w" | "--web-gateway" => {
+                if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                    web_gateway_port = Some(args[i + 1].parse().unwrap_or(8080));
+                    i += 1;
+                } else {
+                    web_gateway_port = Some(8080);
+                }
+            }
+            "-z" | "--dns-redirect" => {
+                if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                    dns_redirect_port = Some(args[i + 1].parse().unwrap_or(53));
+                    i += 1;
+                } else {
+                    dns_redirect_port = Some(53);
+                }
             }
             other => {
                 // Support legacy positional arguments
@@ -85,6 +105,29 @@ fn main() {
     let status = node.get_status();
     println!("  Reticulum Address Hash: {}", status.dest_hash);
     println!("  Stack Engine: Reticulum Network Stack (Rust Core)");
+
+    if let Some(gw_port) = web_gateway_port {
+        match node.start_web_gateway(gw_port) {
+            Ok(gw_stat) => {
+                println!("  Web Gateway: ACTIVE at {}", gw_stat.gateway_url);
+            }
+            Err(e) => {
+                eprintln!("  [WARN] Failed to start Web Gateway on port {}: {}", gw_port, e);
+            }
+        }
+    }
+
+    if let Some(dns_port) = dns_redirect_port {
+        match node.start_dns_server(dns_port, None) {
+            Ok(dns_stat) => {
+                println!("  Captive DNS Server: ACTIVE on UDP port {} (Redirecting * -> {})", dns_stat.port, dns_stat.target_ip);
+            }
+            Err(e) => {
+                eprintln!("  [WARN] Failed to start DNS redirection server on UDP port {}: {}", dns_port, e);
+            }
+        }
+    }
+
     println!("-----------------------------------------------------");
     println!("Node is active and announcing to local mesh. Press Ctrl+C to stop.");
 

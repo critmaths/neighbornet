@@ -3,8 +3,10 @@
 pub mod kiss;
 pub mod lora;
 pub mod web_gateway;
+pub mod dns_server;
 
 pub use web_gateway::{WebGateway, WebGatewayStatus};
+pub use dns_server::{DnsServer, DnsServerStatus};
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
@@ -442,6 +444,7 @@ pub struct NodeInner {
     pub socket: UdpSocket,
     pub lora_manager: Arc<lora::LoraManager>,
     pub web_gateway: parking_lot::Mutex<WebGateway>,
+    pub dns_server: parking_lot::Mutex<DnsServer>,
 }
 
 #[derive(Clone)]
@@ -1407,6 +1410,7 @@ impl NeighborNode {
             socket: socket_clone,
             lora_manager: lora_mgr,
             web_gateway: parking_lot::Mutex::new(WebGateway::new()),
+            dns_server: parking_lot::Mutex::new(DnsServer::new()),
         });
 
         // Set LoRa packet reception callback
@@ -1428,6 +1432,7 @@ impl NeighborNode {
     pub fn stop(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
         self.inner.web_gateway.lock().stop();
+        self.inner.dns_server.lock().stop();
     }
 
     pub fn start_web_gateway(&self, port: u16) -> Result<WebGatewayStatus, String> {
@@ -1440,6 +1445,28 @@ impl NeighborNode {
 
     pub fn get_web_gateway_status(&self) -> WebGatewayStatus {
         self.inner.web_gateway.lock().status()
+    }
+
+    pub fn start_dns_server(&self, port: u16, target_ip_str: Option<&str>) -> Result<DnsServerStatus, String> {
+        let ip = if let Some(ip_s) = target_ip_str {
+            ip_s.parse::<std::net::Ipv4Addr>().map_err(|e| format!("Invalid target IP '{}': {}", ip_s, e))?
+        } else {
+            let gw_status = self.get_web_gateway_status();
+            if !gw_status.local_ip.is_empty() {
+                gw_status.local_ip.parse::<std::net::Ipv4Addr>().unwrap_or_else(|_| std::net::Ipv4Addr::new(127, 0, 0, 1))
+            } else {
+                std::net::Ipv4Addr::new(127, 0, 0, 1)
+            }
+        };
+        self.inner.dns_server.lock().start(port, ip)
+    }
+
+    pub fn stop_dns_server(&self) {
+        self.inner.dns_server.lock().stop();
+    }
+
+    pub fn get_dns_server_status(&self) -> DnsServerStatus {
+        self.inner.dns_server.lock().status()
     }
 
     pub fn get_status(&self) -> NodeStatus {
@@ -5528,5 +5555,69 @@ pub extern "C" fn neighbornet_get_web_gateway_status_json() -> *mut c_char {
     let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
     to_c_string(json)
 }
+
+// --- CAPTIVE PORTAL DNS REDIRECTION FFI EXPORTS ---
+
+#[no_mangle]
+pub extern "C" fn neighbornet_start_dns_server(port: u16, target_ip: *const c_char) -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return to_c_string("{\"error\":\"Node not initialized\"}".to_string()),
+    };
+
+    let ip_opt = if !target_ip.is_null() {
+        unsafe {
+            CStr::from_ptr(target_ip)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        }
+    } else {
+        None
+    };
+
+    match node.start_dns_server(port, ip_opt.as_deref()) {
+        Ok(status) => {
+            let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
+            to_c_string(json)
+        }
+        Err(e) => {
+            let json = serde_json::json!({ "error": e }).to_string();
+            to_c_string(json)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_stop_dns_server() -> bool {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.stop_dns_server();
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_get_dns_server_status_json() -> *mut c_char {
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => {
+            return to_c_string(
+                "{\"is_running\":false,\"port\":0,\"target_ip\":\"\",\"queries_answered\":0}"
+                    .to_string(),
+            )
+        }
+    };
+
+    let status = node.get_dns_server_status();
+    let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
+    to_c_string(json)
+}
+
 
 

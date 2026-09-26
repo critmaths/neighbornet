@@ -37,6 +37,9 @@ The Web Gateway detects and intercepts standard OS captive portal connectivity c
    - Click **Copy Portal URL** to share the local link (e.g. `http://192.168.1.50:8080`).
    - Click **Show QR Code** to display a large high-contrast QR code on your screen for smartphones to scan.
    - Click **Open in Browser** to test the web interface locally.
+6. Under **Hotspot Captive DNS Auto-Redirect**:
+   - Set the UDP DNS Port (default: `53`).
+   - Click **Start DNS Redirect** to automatically resolve all client domain requests to the node IP.
 
 ---
 
@@ -64,6 +67,8 @@ dhcp-range=192.168.4.10,192.168.4.200,255.255.255.0,24h
 address=/#/192.168.4.1
 ```
 
+> **Tip (Zero-Config Alternative)**: NeighborNet includes a built-in RFC 1035 UDP DNS server. If using `dhcpcd` or an external DHCP server without `dnsmasq`, you can launch the relay with `-z 53` (`--dns-redirect 53`) and it will automatically answer all domain queries with the node's IP address.
+
 ### 4. Configure `hostapd` in `/etc/hostapd/hostapd.conf`
 ```ini
 interface=wlan0
@@ -77,7 +82,13 @@ auth_algs=1
 ignore_broadcast_ssid=0
 ```
 
-### 5. Redirect HTTP Traffic (Port 80 to 8080) with `iptables`
+### 5. Launch Node with Built-in Web Gateway & DNS Server
+```bash
+# Run headless node with Web Gateway on port 8080 and DNS redirect on UDP 53
+sudo ./target/release/neighbornet_node -t -w 8080 -z 53
+```
+
+### 6. Redirect HTTP Traffic (Port 80 to 8080) with `iptables`
 ```bash
 sudo iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-port 8080
 sudo sh -c "iptables-save > /etc/iptables.ipv4.nat"

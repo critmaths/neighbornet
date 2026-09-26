@@ -150,6 +150,16 @@ typedef _DartStopWebGateway = bool Function();
 typedef _NativeGetWebGatewayStatus = Pointer<Utf8> Function();
 typedef _DartGetWebGatewayStatus = Pointer<Utf8> Function();
 
+typedef _NativeStartDnsServer = Pointer<Utf8> Function(Uint16, Pointer<Utf8>);
+typedef _DartStartDnsServer = Pointer<Utf8> Function(int, Pointer<Utf8>);
+
+typedef _NativeStopDnsServer = Bool Function();
+typedef _DartStopDnsServer = bool Function();
+
+typedef _NativeGetDnsServerStatus = Pointer<Utf8> Function();
+typedef _DartGetDnsServerStatus = Pointer<Utf8> Function();
+
+
 class NeighborNetBridge {
   static final NeighborNetBridge _instance = NeighborNetBridge._internal();
   factory NeighborNetBridge() => _instance;
@@ -230,6 +240,11 @@ class NeighborNetBridge {
   late _DartStartWebGateway _startWebGateway;
   late _DartStopWebGateway _stopWebGateway;
   late _DartGetWebGatewayStatus _getWebGatewayStatusJson;
+
+  late _DartStartDnsServer _startDnsServer;
+  late _DartStopDnsServer _stopDnsServer;
+  late _DartGetDnsServerStatus _getDnsServerStatusJson;
+
 
   bool get isReady => _isInitialized;
 
@@ -332,6 +347,10 @@ class NeighborNetBridge {
     _startWebGateway = _dylib!.lookupFunction<_NativeStartWebGateway, _DartStartWebGateway>('neighbornet_start_web_gateway');
     _stopWebGateway = _dylib!.lookupFunction<_NativeStopWebGateway, _DartStopWebGateway>('neighbornet_stop_web_gateway');
     _getWebGatewayStatusJson = _dylib!.lookupFunction<_NativeGetWebGatewayStatus, _DartGetWebGatewayStatus>('neighbornet_get_web_gateway_status_json');
+
+    _startDnsServer = _dylib!.lookupFunction<_NativeStartDnsServer, _DartStartDnsServer>('neighbornet_start_dns_server');
+    _stopDnsServer = _dylib!.lookupFunction<_NativeStopDnsServer, _DartStopDnsServer>('neighbornet_stop_dns_server');
+    _getDnsServerStatusJson = _dylib!.lookupFunction<_NativeGetDnsServerStatus, _DartGetDnsServerStatus>('neighbornet_get_dns_server_status_json');
   }
 
   bool initNode({String? dataDir, int listenPort = 42424, bool isTransport = false}) {
@@ -1380,6 +1399,53 @@ class NeighborNetBridge {
       return null;
     }
   }
+
+  DnsServerStatus? startDnsServer({int port = 53, String? targetIp}) {
+    if (!_isInitialized) return null;
+    final ipPtr = targetIp != null ? targetIp.toNativeUtf8() : nullptr;
+    try {
+      final ptr = _startDnsServer(port, ipPtr);
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return DnsServerStatus.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      if (ipPtr != nullptr) calloc.free(ipPtr);
+    }
+  }
+
+  bool stopDnsServer() {
+    if (!_isInitialized) return false;
+    try {
+      return _stopDnsServer();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  DnsServerStatus? getDnsServerStatus() {
+    if (!_isInitialized) return null;
+    try {
+      final ptr = _getDnsServerStatusJson();
+      if (ptr == nullptr) return null;
+      try {
+        final jsonStr = ptr.toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return DnsServerStatus.fromJson(map);
+      } finally {
+        _freeString(ptr);
+      }
+    } catch (_) {
+      return null;
+    }
+  }
 }
+
 
 

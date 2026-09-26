@@ -1336,6 +1336,39 @@ class WebGatewayStatus {
   }
 }
 
+class DnsServerStatus {
+  final bool isRunning;
+  final int port;
+  final String targetIp;
+  final int queriesAnswered;
+
+  DnsServerStatus({
+    required this.isRunning,
+    required this.port,
+    required this.targetIp,
+    required this.queriesAnswered,
+  });
+
+  factory DnsServerStatus.fromJson(Map<String, dynamic> json) {
+    return DnsServerStatus(
+      isRunning: json['is_running'] as bool? ?? false,
+      port: (json['port'] as num?)?.toInt() ?? 53,
+      targetIp: json['target_ip'] as String? ?? '127.0.0.1',
+      queriesAnswered: (json['queries_answered'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'is_running': isRunning,
+      'port': port,
+      'target_ip': targetIp,
+      'queries_answered': queriesAnswered,
+    };
+  }
+}
+
+
 
 
 
