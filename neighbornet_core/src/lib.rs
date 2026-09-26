@@ -3281,6 +3281,21 @@ fn start_network_threads(inner: Arc<NodeInner>, socket: UdpSocket) {
     });
 }
 
+fn relay_envelope_if_transport(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: &WireEnvelope, src: SocketAddr) {
+    if inner.is_transport {
+        if let Ok(json) = serde_json::to_string(envelope) {
+            let peer_addrs: Vec<String> = inner.peers.read().values().map(|p| p.addr.clone()).collect();
+            for addr in peer_addrs {
+                if let Ok(dest) = addr.parse::<SocketAddr>() {
+                    if dest != src {
+                        let _ = socket.send_to(json.as_bytes(), dest);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnvelope, src: SocketAddr) {
     match envelope {
         WireEnvelope::Announce {
@@ -3374,6 +3389,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         ]
                     );
                 }
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::Chat(msg), src);
             }
         }
         WireEnvelope::Bulletin(post) => {
@@ -3396,6 +3412,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         ]
                     );
                 }
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::Bulletin(post), src);
             }
         }
         WireEnvelope::SyncRequest {
@@ -4124,7 +4141,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         ],
                     );
                 }
-                inner.barter_listings.write().insert(listing.id.clone(), listing);
+                inner.barter_listings.write().insert(listing.id.clone(), listing.clone());
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::BarterListingAnnounce(listing), src);
             }
         }
         WireEnvelope::BarterListingStatusUpdate { listing_id, status } => {
@@ -4137,6 +4155,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         rusqlite::params![status, listing_id],
                     );
                 }
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::BarterListingStatusUpdate { listing_id, status }, src);
             }
         }
         WireEnvelope::BarterProposalAnnounce(proposal) => {
@@ -4163,7 +4182,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                     .write()
                     .entry(proposal.listing_id.clone())
                     .or_default()
-                    .push(proposal);
+                    .push(proposal.clone());
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::BarterProposalAnnounce(proposal), src);
             }
         }
         WireEnvelope::BarterProposalStatusUpdate {
@@ -4181,6 +4201,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                             rusqlite::params![status, proposal_id],
                         );
                     }
+                    relay_envelope_if_transport(inner, socket, &WireEnvelope::BarterProposalStatusUpdate { proposal_id, listing_id, status }, src);
                 }
             }
         }

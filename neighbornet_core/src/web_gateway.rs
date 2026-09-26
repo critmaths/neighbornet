@@ -281,6 +281,7 @@ fn handle_client(mut stream: TcpStream, node: &NeighborNode) {
 
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+    let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
 pub const PORTAL_HTML: &str = r#"<!DOCTYPE html>
