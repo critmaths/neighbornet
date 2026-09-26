@@ -2,7 +2,6 @@ title: NeighborNet
 description: A resilient, local-first community communications and survival network operating 100% offline without internet, built on Reticulum Network Stack.
 theme: jekyll-theme-slate
 show_downloads: false
-google_analytics:
 markdown: kramdown
 kramdown:
   input: GFM
