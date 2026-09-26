@@ -113,9 +113,42 @@ fn get_local_ip() -> String {
     "127.0.0.1".to_string()
 }
 
+fn find_download_file(candidates: &[&str]) -> Option<std::path::PathBuf> {
+    for cand in candidates {
+        let p = std::path::PathBuf::from(cand);
+        if p.exists() && p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn stream_binary_file(stream: &mut TcpStream, file_path: &std::path::Path, content_type: &str, download_name: &str) -> bool {
+    if let Ok(mut file) = std::fs::File::open(file_path) {
+        if let Ok(meta) = file.metadata() {
+            let file_size = meta.len();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"{}\"\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+                content_type, file_size, download_name
+            );
+            if stream.write_all(header.as_bytes()).is_ok() {
+                let mut buf = [0u8; 64 * 1024];
+                while let Ok(n) = file.read(&mut buf) {
+                    if n == 0 { break; }
+                    if stream.write_all(&buf[..n]).is_err() { break; }
+                }
+                let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn handle_client(mut stream: TcpStream, node: &NeighborNode) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 
     let mut buffer = [0u8; 8192];
     let mut total_read = 0;
@@ -155,8 +188,51 @@ fn handle_client(mut stream: TcpStream, node: &NeighborNode) {
         ""
     };
 
+    // Check for offline binary downloads (Android APK & Windows zip)
+    if method == "GET" {
+        if path == "/download/android" || path == "/download/apk" {
+            let candidates = [
+                "dist/NeighborNet-Android-Universal.apk",
+                "NeighborNet-Android-Universal.apk",
+                "dist/NeighborNet.apk",
+                "neighbornet_app/build/app/outputs/flutter-apk/app-release.apk",
+                "../dist/NeighborNet-Android-Universal.apk",
+            ];
+            if let Some(file_path) = find_download_file(&candidates) {
+                if stream_binary_file(&mut stream, &file_path, "application/vnd.android.package-archive", "NeighborNet.apk") {
+                    return;
+                }
+            }
+        } else if path == "/download/windows" || path == "/download/zip" {
+            let candidates = [
+                "dist/NeighborNet_v0.1.0_Windows_x64.zip",
+                "NeighborNet_v0.1.0_Windows_x64.zip",
+                "dist/NeighborNet-Windows-x64.zip",
+                "dist/NeighborNet_Setup_v0.1.0_x64.exe",
+                "../dist/NeighborNet_v0.1.0_Windows_x64.zip",
+            ];
+            if let Some(file_path) = find_download_file(&candidates) {
+                let (mime, fname) = if file_path.extension().and_then(|e| e.to_str()) == Some("exe") {
+                    ("application/vnd.microsoft.portable-executable", "NeighborNet_Setup_v0.1.0_x64.exe")
+                } else {
+                    ("application/zip", "NeighborNet_Windows_x64.zip")
+                };
+                if stream_binary_file(&mut stream, &file_path, mime, fname) {
+                    return;
+                }
+            }
+        }
+    }
+
     // Route request
     let (status_code, content_type, response_body) = match (method, path) {
+        // Fallback for download requests when local binaries are not cached
+        ("GET", "/download/android") | ("GET", "/download/apk") => {
+            ("404 Not Found", "text/plain; charset=utf-8", "Android APK not currently cached in /dist on this node. Please connect to a node with APK in /dist or use the zero-install web portal.".to_string())
+        }
+        ("GET", "/download/windows") | ("GET", "/download/zip") => {
+            ("404 Not Found", "text/plain; charset=utf-8", "Windows release zip not currently cached in /dist on this node. Please connect to a node with release zip in /dist or use the zero-install web portal.".to_string())
+        }
         // Captive portal probes
         ("GET", "/generate_204")
         | ("GET", "/gen_204")
@@ -344,6 +420,7 @@ pub const PORTAL_HTML: &str = r#"<!DOCTYPE html>
   <button class="nav-btn" onclick="switchTab('bulletins')">📢 Bulletins</button>
   <button class="nav-btn" onclick="switchTab('barter')">📦 Barter Market</button>
   <button class="nav-btn" onclick="switchTab('manual')">📖 Survival Manual</button>
+  <button class="nav-btn" onclick="switchTab('download')">📥 Get App (Offline)</button>
   <button class="nav-btn" onclick="switchTab('sos')">🚨 SOS Distress</button>
   <button class="nav-btn" onclick="switchTab('status')">📡 Node Health</button>
 </div>
@@ -427,6 +504,38 @@ pub const PORTAL_HTML: &str = r#"<!DOCTYPE html>
       Triggering this SOS beacon immediately broadcasts a high-priority distress signal across the local Reticulum mesh and posts a Critical Life Safety Bulletin to all connected neighbors.
     </p>
     <button class="btn btn-danger" style="font-size:1.1rem; padding:14px 28px;" onclick="triggerSos()">TRIGGER SOS BEACON</button>
+  </div>
+</div>
+
+<!-- DOWNLOAD TAB -->
+<div id="tab-download" class="tab-content">
+  <div class="card">
+    <div class="card-title">📥 Sideload & Spread NeighborNet Over Local Wi-Fi</div>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px; line-height: 1.5;">
+      Zero internet or cellular data required. Download the native installation files directly from this relay station over the local Wi-Fi connection to become an independent mesh peer.
+    </p>
+    <div class="grid-2">
+      <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 16px; border-radius: 8px;">
+        <div style="font-weight: bold; color: var(--primary); font-size: 1.1rem; margin-bottom: 6px;">📱 Android APK (Direct Sideload)</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+          Universal Android application package. Works on any Android phone or tablet without Google Play or cellular network access.
+        </p>
+        <a href="/download/android" class="btn" style="display: block; text-decoration: none; text-align: center;">⬇️ Download Android APK</a>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 10px;">
+          <b>Installation Tip:</b> Once downloaded, tap the file to open. If prompted, allow "Install unknown apps" in browser settings.
+        </div>
+      </div>
+      <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 16px; border-radius: 8px;">
+        <div style="font-weight: bold; color: var(--primary); font-size: 1.1rem; margin-bottom: 6px;">💻 Windows Communicator</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+          Portable ZIP package containing the graphical communicator, headless relay daemon, and LoRa radio drivers.
+        </p>
+        <a href="/download/windows" class="btn" style="display: block; text-decoration: none; text-align: center;">⬇️ Download Windows Package</a>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 10px;">
+          <b>Usage Tip:</b> Unzip to any folder or USB drive, then double-click <code>Run_NeighborNet_GUI.bat</code>.
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 

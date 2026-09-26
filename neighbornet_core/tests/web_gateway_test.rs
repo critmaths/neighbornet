@@ -78,6 +78,14 @@ fn test_web_gateway_lifecycle_and_api() {
     assert!(response.contains("HTTP/1.1 200 OK"));
     assert!(response.contains("Water Distribution Point"));
 
+    // Test 6b: Offline App Download Endpoint (GET /download/windows)
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).expect("Failed to connect to gateway");
+    stream.write_all(b"GET /download/windows HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+    let mut response_bytes = Vec::new();
+    stream.read_to_end(&mut response_bytes).unwrap();
+    let header_str = String::from_utf8_lossy(&response_bytes[..response_bytes.len().min(500)]);
+    assert!(header_str.contains("HTTP/1.1 200 OK") || header_str.contains("HTTP/1.1 404 Not Found"));
+
     // Test 7: Stop Web Gateway
     node.stop_web_gateway();
     let stopped_status = node.get_web_gateway_status();
