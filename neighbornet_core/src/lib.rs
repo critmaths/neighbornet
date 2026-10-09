@@ -1642,21 +1642,56 @@ impl NeighborNode {
     pub fn get_chat_history(&self, channel: &str) -> Vec<ChatMessage> {
         let mut msgs = Vec::new();
         if let Ok(db) = self.inner.db.lock() {
-            if let Ok(mut stmt) = db.prepare("SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec FROM messages WHERE channel = ?1 ORDER BY timestamp_sec ASC") {
-                if let Ok(msg_iter) = stmt.query_map(rusqlite::params![channel], |row| {
-                    Ok(ChatMessage {
-                        id: row.get(0)?,
-                        channel: row.get(1)?,
-                        sender_hash: row.get(2)?,
-                        sender_nickname: row.get(3)?,
-                        content: row.get(4)?,
-                        timestamp_sec: row.get(5)?,
-                        audio_base64: row.get(6).ok(),
-                        audio_duration_sec: row.get(7).ok(),
-                    })
-                }) {
-                    for msg in msg_iter.flatten() {
-                        msgs.push(msg);
+            let is_dm = channel.starts_with("dm_");
+            let my_dm = format!("dm_{}", self.inner.dest_hash_hex);
+            let peer_hash = if is_dm { &channel["dm_".len()..] } else { "" };
+
+            let sql = if is_dm {
+                "SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec \
+                 FROM messages \
+                 WHERE channel = ?1 OR (channel = ?2 AND sender_hash = ?3) \
+                 ORDER BY timestamp_sec ASC"
+            } else {
+                "SELECT id, channel, sender_hash, sender_nickname, content, timestamp_sec, audio_base64, audio_duration_sec \
+                 FROM messages \
+                 WHERE channel = ?1 \
+                 ORDER BY timestamp_sec ASC"
+            };
+
+            if let Ok(mut stmt) = db.prepare(sql) {
+                if is_dm {
+                    if let Ok(msg_iter) = stmt.query_map(rusqlite::params![channel, my_dm, peer_hash], |row| {
+                        Ok(ChatMessage {
+                            id: row.get(0)?,
+                            channel: channel.to_string(),
+                            sender_hash: row.get(2)?,
+                            sender_nickname: row.get(3)?,
+                            content: row.get(4)?,
+                            timestamp_sec: row.get(5)?,
+                            audio_base64: row.get(6).ok(),
+                            audio_duration_sec: row.get(7).ok(),
+                        })
+                    }) {
+                        for msg in msg_iter.flatten() {
+                            msgs.push(msg);
+                        }
+                    }
+                } else {
+                    if let Ok(msg_iter) = stmt.query_map(rusqlite::params![channel], |row| {
+                        Ok(ChatMessage {
+                            id: row.get(0)?,
+                            channel: row.get(1)?,
+                            sender_hash: row.get(2)?,
+                            sender_nickname: row.get(3)?,
+                            content: row.get(4)?,
+                            timestamp_sec: row.get(5)?,
+                            audio_base64: row.get(6).ok(),
+                            audio_duration_sec: row.get(7).ok(),
+                        })
+                    }) {
+                        for msg in msg_iter.flatten() {
+                            msgs.push(msg);
+                        }
                     }
                 }
             }
@@ -3368,9 +3403,16 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 }
             }
         }
-        WireEnvelope::Chat(msg) => {
+        WireEnvelope::Chat(mut msg) => {
+            let original_envelope = WireEnvelope::Chat(msg.clone());
             let mut seen = inner.seen_ids.write();
             if seen.insert(msg.id.clone()) {
+                // If this is a direct message addressed specifically to this node (dm_<my_dest_hash>):
+                // Remap the channel locally to dm_<sender_hash> so it falls into the direct thread with that sender.
+                if msg.channel == format!("dm_{}", inner.dest_hash_hex) {
+                    msg.channel = format!("dm_{}", msg.sender_hash);
+                }
+
                 let mut messages = inner.messages.write();
                 messages.push(msg.clone());
                 
@@ -3389,7 +3431,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                         ]
                     );
                 }
-                relay_envelope_if_transport(inner, socket, &WireEnvelope::Chat(msg), src);
+                relay_envelope_if_transport(inner, socket, &original_envelope, src);
             }
         }
         WireEnvelope::Bulletin(post) => {

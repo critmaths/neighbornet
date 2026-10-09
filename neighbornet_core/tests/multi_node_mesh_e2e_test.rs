@@ -180,3 +180,66 @@ fn test_multi_node_mesh_e2e_gossip_barter_and_partition_healing() {
 
     println!("\n=== ALL MULTI-PEER MESH INTEGRATION TESTS PASSED WITH 100% EVENTUAL CONSISTENCY ===\n");
 }
+
+#[test]
+fn test_direct_whisper_two_way_communication() {
+    let dir_a = tempdir().unwrap();
+    let dir_b = tempdir().unwrap();
+
+    let port_a: u16 = 46410;
+    let port_b: u16 = 46420;
+
+    let node_a = NeighborNode::new(dir_a.path().to_path_buf(), port_a, false).unwrap();
+    node_a.set_nickname("Alice Desktop".to_string());
+    let hash_a = node_a.get_status().dest_hash;
+
+    let node_b = NeighborNode::new(dir_b.path().to_path_buf(), port_b, false).unwrap();
+    node_b.set_nickname("Bob Laptop".to_string());
+    let hash_b = node_b.get_status().dest_hash;
+
+    // Connect peers directly
+    node_a.connect_peer(format!("127.0.0.1:{}", port_b).parse().unwrap());
+    node_b.connect_peer(format!("127.0.0.1:{}", port_a).parse().unwrap());
+
+    thread::sleep(Duration::from_millis(400));
+
+    // 1. Alice sends Direct Whisper to Bob: channel = dm_<hash_b>
+    let msg_from_a = "Secret whisper from Alice to Bob";
+    node_a.send_chat(format!("dm_{}", hash_b), msg_from_a.to_string());
+
+    // 2. Bob should see Alice's whisper in Bob's thread for Alice: dm_<hash_a>
+    let mut bob_received_a = false;
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(200));
+        let bob_history = node_b.get_chat_history(&format!("dm_{}", hash_a));
+        if bob_history.iter().any(|m| m.content == msg_from_a) {
+            bob_received_a = true;
+            break;
+        }
+    }
+    assert!(bob_received_a, "Bob failed to receive Alice's direct whisper in channel dm_{}", hash_a);
+
+    // 3. Bob sends Direct Whisper reply to Alice: channel = dm_<hash_a>
+    let msg_from_b = "Whisper acknowledged by Bob";
+    node_b.send_chat(format!("dm_{}", hash_a), msg_from_b.to_string());
+
+    // 4. Alice should see both her message and Bob's reply in thread dm_<hash_b>
+    let mut alice_received_b = false;
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(200));
+        let alice_history = node_a.get_chat_history(&format!("dm_{}", hash_b));
+        if alice_history.iter().any(|m| m.content == msg_from_b) {
+            alice_received_b = true;
+            break;
+        }
+    }
+    assert!(alice_received_b, "Alice failed to receive Bob's direct whisper reply in channel dm_{}", hash_b);
+
+    // Verify Bob's view also contains both messages
+    let bob_final_history = node_b.get_chat_history(&format!("dm_{}", hash_a));
+    assert!(bob_final_history.iter().any(|m| m.content == msg_from_a), "Bob history missing Alice's message");
+    assert!(bob_final_history.iter().any(|m| m.content == msg_from_b), "Bob history missing Bob's own reply");
+
+    node_a.stop();
+    node_b.stop();
+}

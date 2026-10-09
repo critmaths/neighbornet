@@ -88,6 +88,15 @@ void main() {
     expect(find.text('Minimize Just to Tray'), findsOneWidget);
     expect(find.text('Send to Tray When Closing (X)'), findsOneWidget);
 
+    // Switch to Help & How-To view
+    expect(find.text('Help & How-To'), findsOneWidget);
+    await tester.tap(find.text('Help & How-To'));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('NeighborNet User Manual & Operational Reference'), findsOneWidget);
+    expect(find.text('1. Connecting Two Machines on Local Network'), findsOneWidget);
+    expect(find.text('2. Direct Whispers (E2EE 1-on-1 Messaging)'), findsOneWidget);
+
     // Clean up
     state.dispose();
     tester.view.resetPhysicalSize();

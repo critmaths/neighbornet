@@ -14,6 +14,7 @@ import 'views/ptt_walkie_talkie_view.dart';
 import 'views/tactical_map_view.dart';
 import 'views/traceroute_view.dart';
 import 'views/files_view.dart';
+import 'views/help_view.dart';
 import 'services/voice_chat_service.dart';
 import 'package:provider/provider.dart';
 
@@ -69,6 +70,13 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
+  final ScrollController _navScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _navScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -81,161 +89,262 @@ class _MainShellState extends State<MainShell> {
         return Scaffold(
           body: Row(
             children: [
-              // Left Navigation Rail
-              NavigationRail(
-                selectedIndex: _selectedIndex,
-                onDestinationSelected: (int index) {
-                  setState(() {
-                    _selectedIndex = index;
-                  });
-                },
-                extended: true,
-                minExtendedWidth: 230,
-                leading: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
-                              borderRadius: BorderRadius.circular(10),
+              // Left Navigation Sidebar with Scrollbar & Disconnected Help Button
+              SizedBox(
+                width: 255,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return Scrollbar(
+                      controller: _navScrollController,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        controller: _navScrollController,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          child: IntrinsicHeight(
+                            child: NavigationRail(
+                              selectedIndex: _selectedIndex >= 13 ? null : _selectedIndex,
+                              onDestinationSelected: (int index) {
+                                setState(() {
+                                  _selectedIndex = index;
+                                });
+                              },
+                              extended: true,
+                              minExtendedWidth: 235,
+                              leading: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context).colorScheme.primary,
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: const Icon(Icons.hub_rounded, color: Colors.white, size: 22),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        const Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'NeighborNet',
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                              ),
+                                              Text(
+                                                'Community Mesh',
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(fontSize: 11, color: Colors.grey),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    // Live Nearby Status Pill
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: (hasPeers ? Colors.green : Colors.amber).withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: (hasPeers ? Colors.green : Colors.amber).withValues(alpha: 0.3),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 8,
+                                            height: 8,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: hasPeers ? Colors.green : Colors.amber,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              hasPeers
+                                                  ? '$peersCount nearby participant${peersCount == 1 ? '' : 's'}'
+                                                  : 'Searching local mesh...',
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
+                                                color: hasPeers ? Colors.green.shade800 : Colors.amber.shade900,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              destinations: [
+                                NavigationRailDestination(
+                                  icon: Badge(
+                                    isLabelVisible: widget.state.totalUnreadCount > 0,
+                                    label: Text('${widget.state.totalUnreadCount}'),
+                                    child: const Icon(Icons.chat_bubble_outline),
+                                  ),
+                                  selectedIcon: Badge(
+                                    isLabelVisible: widget.state.totalUnreadCount > 0,
+                                    label: Text('${widget.state.totalUnreadCount}'),
+                                    child: const Icon(Icons.chat_bubble),
+                                  ),
+                                  label: const Text('Chat'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.campaign_outlined),
+                                  selectedIcon: const Icon(Icons.campaign),
+                                  label: const Text('Bulletin'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.folder_shared_outlined),
+                                  selectedIcon: const Icon(Icons.folder_shared),
+                                  label: const Text('Files & Vault'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.assignment_outlined),
+                                  selectedIcon: const Icon(Icons.assignment),
+                                  label: const Text('Community Forms'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.storefront_outlined),
+                                  selectedIcon: const Icon(Icons.storefront),
+                                  label: const Text('Market & Barter'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.map_outlined),
+                                  selectedIcon: const Icon(Icons.map),
+                                  label: const Text('Tactical Map'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.alt_route),
+                                  selectedIcon: const Icon(Icons.alt_route, color: Color(0xFF38BDF8)),
+                                  label: const Text('Mesh Traceroute'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.people_outline),
+                                  selectedIcon: const Icon(Icons.people),
+                                  label: const Text('People & Nodes'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.phone_outlined),
+                                  selectedIcon: const Icon(Icons.phone),
+                                  label: const Text('Voice Chat'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.radio_outlined),
+                                  selectedIcon: const Icon(Icons.radio),
+                                  label: const Text('Walkie-Talkie (PTT)'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.menu_book_outlined),
+                                  selectedIcon: const Icon(Icons.menu_book),
+                                  label: const Text('Survival Manual'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.shield_outlined),
+                                  selectedIcon: const Icon(Icons.shield, color: Colors.red),
+                                  label: const Text('Emergency Mode'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: const Icon(Icons.settings_outlined),
+                                  selectedIcon: const Icon(Icons.settings),
+                                  label: const Text('Settings'),
+                                ),
+                              ],
+                              trailing: Expanded(
+                                child: Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 24, bottom: 16, left: 12, right: 12),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Divider(height: 1),
+                                        const SizedBox(height: 10),
+                                        InkWell(
+                                          borderRadius: BorderRadius.circular(12),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedIndex = 13;
+                                            });
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                            decoration: BoxDecoration(
+                                              color: _selectedIndex == 13
+                                                  ? Theme.of(context).colorScheme.secondaryContainer
+                                                  : Colors.transparent,
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.all(5),
+                                                  decoration: BoxDecoration(
+                                                    shape: BoxShape.circle,
+                                                    color: _selectedIndex == 13
+                                                        ? Theme.of(context).colorScheme.primary
+                                                        : Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                                                  ),
+                                                  child: Icon(
+                                                    Icons.question_mark_rounded,
+                                                    size: 15,
+                                                    color: _selectedIndex == 13
+                                                        ? Colors.white
+                                                        : Theme.of(context).colorScheme.primary,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        'Help & How-To',
+                                                        style: TextStyle(
+                                                          fontSize: 13,
+                                                          fontWeight: _selectedIndex == 13
+                                                              ? FontWeight.bold
+                                                              : FontWeight.w600,
+                                                          color: _selectedIndex == 13
+                                                              ? Theme.of(context).colorScheme.onSecondaryContainer
+                                                              : null,
+                                                        ),
+                                                      ),
+                                                      const Text(
+                                                        'User guide & manual',
+                                                        style: TextStyle(fontSize: 10, color: Colors.grey),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
-                            child: const Icon(Icons.hub_rounded, color: Colors.white, size: 22),
-                          ),
-                          const SizedBox(width: 10),
-                          const Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'NeighborNet',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                              ),
-                              Text(
-                                'Community Mesh',
-                                style: TextStyle(fontSize: 11, color: Colors.grey),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      // Live Nearby Status Pill
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: (hasPeers ? Colors.green : Colors.amber).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: (hasPeers ? Colors.green : Colors.amber).withValues(alpha: 0.3),
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: hasPeers ? Colors.green : Colors.amber,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              hasPeers
-                                  ? '$peersCount nearby participant${peersCount == 1 ? '' : 's'}'
-                                  : 'Searching local mesh...',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: hasPeers ? Colors.green.shade800 : Colors.amber.shade900,
-                              ),
-                            ),
-                          ],
-                        ),
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
-                destinations: [
-                  NavigationRailDestination(
-                    icon: Badge(
-                      isLabelVisible: widget.state.totalUnreadCount > 0,
-                      label: Text('${widget.state.totalUnreadCount}'),
-                      child: const Icon(Icons.chat_bubble_outline),
-                    ),
-                    selectedIcon: Badge(
-                      isLabelVisible: widget.state.totalUnreadCount > 0,
-                      label: Text('${widget.state.totalUnreadCount}'),
-                      child: const Icon(Icons.chat_bubble),
-                    ),
-                    label: const Text('Chat'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.campaign_outlined),
-                    selectedIcon: Icon(Icons.campaign),
-                    label: Text('Bulletin'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.folder_shared_outlined),
-                    selectedIcon: Icon(Icons.folder_shared),
-                    label: Text('Files & Vault'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.assignment_outlined),
-                    selectedIcon: Icon(Icons.assignment),
-                    label: Text('Community Forms'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.storefront_outlined),
-                    selectedIcon: Icon(Icons.storefront),
-                    label: Text('Market & Barter'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.map_outlined),
-                    selectedIcon: Icon(Icons.map),
-                    label: Text('Tactical Map'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.alt_route),
-                    selectedIcon: Icon(Icons.alt_route, color: Color(0xFF38BDF8)),
-                    label: Text('Mesh Traceroute'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.people_outline),
-                    selectedIcon: Icon(Icons.people),
-                    label: Text('People & Nodes'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.phone_outlined),
-                    selectedIcon: Icon(Icons.phone),
-                    label: Text('Voice Chat'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.radio_outlined),
-                    selectedIcon: Icon(Icons.radio),
-                    label: Text('Walkie-Talkie (PTT)'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.menu_book_outlined),
-                    selectedIcon: Icon(Icons.menu_book),
-                    label: Text('Survival Manual'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.shield_outlined),
-                    selectedIcon: Icon(Icons.shield, color: Colors.red),
-                    label: Text('Emergency Mode'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.settings_outlined),
-                    selectedIcon: Icon(Icons.settings),
-                    label: Text('Settings'),
-                  ),
-                ],
               ),
 
               const VerticalDivider(thickness: 1, width: 1),
@@ -279,6 +388,8 @@ class _MainShellState extends State<MainShell> {
         return EmergencyView(state: widget.state);
       case 12:
         return SettingsView(state: widget.state);
+      case 13:
+        return HelpView(state: widget.state);
       default:
         return ChatView(state: widget.state);
     }
