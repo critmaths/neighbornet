@@ -1,5 +1,8 @@
 # NeighborNet 🌐📡
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?style=flat-square&logo=github)](https://github.com/sponsors/critmaths)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+
 > **A resilient, local-first community communications and information network that operates without internet or central servers, built on the Reticulum Network Stack.**
 
 NeighborNet is designed for neighborhoods, local communities, and emergency response teams to stay connected when conventional telecom and internet infrastructure fails. It combines an ultra-efficient native cryptographic networking engine written in Rust with a clean, intuitive cross-platform Flutter application.
@@ -95,3 +98,12 @@ flutter test
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## 💖 Sponsoring & Support
+
+If NeighborNet helps your community build resilient local communications, please consider supporting ongoing open-source development:
+
+👉 **[Become a GitHub Sponsor](https://github.com/sponsors/critmaths)**
+
