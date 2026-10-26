@@ -165,6 +165,7 @@ class NeighborNetBridge {
   late _DartGetJson _getPeersJson;
   late _DartSendChat _sendChat;
   late _DartGetChatHistory _getChatHistoryJson;
+  late _DartRequestFile _clearChatChannel;
   late _DartPostBulletin _postBulletin;
   late _DartGetJson _getBulletinsJson;
   late _DartFreeString _freeString;
@@ -179,6 +180,7 @@ class NeighborNetBridge {
   late _DartExportFile _exportFile;
 
   late _DartCreateRoom _createRoom;
+  late _DartDeleteMarker _deleteRoom;
   late _DartGetJson _getRoomsJson;
   late _DartProposeVote _proposeVote;
   late _DartCastVote _castVote;
@@ -268,6 +270,7 @@ class NeighborNetBridge {
     _getPeersJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_peers_json');
     _sendChat = _dylib!.lookupFunction<_NativeSendChat, _DartSendChat>('neighbornet_send_chat');
     _getChatHistoryJson = _dylib!.lookupFunction<_NativeGetChatHistory, _DartGetChatHistory>('neighbornet_get_chat_history_json');
+    _clearChatChannel = _dylib!.lookupFunction<_NativeRequestFile, _DartRequestFile>('neighbornet_clear_chat_channel');
     _postBulletin = _dylib!.lookupFunction<_NativePostBulletin, _DartPostBulletin>('neighbornet_post_bulletin');
     _getBulletinsJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_bulletins_json');
     _freeString = _dylib!.lookupFunction<_NativeFreeString, _DartFreeString>('neighbornet_free_string');
@@ -282,6 +285,7 @@ class NeighborNetBridge {
     _exportFile = _dylib!.lookupFunction<_NativeExportFile, _DartExportFile>('neighbornet_export_file');
 
     _createRoom = _dylib!.lookupFunction<_NativeCreateRoom, _DartCreateRoom>('neighbornet_create_room');
+    _deleteRoom = _dylib!.lookupFunction<_NativeDeleteMarker, _DartDeleteMarker>('neighbornet_delete_room');
     _getRoomsJson = _dylib!.lookupFunction<_NativeGetJson, _DartGetJson>('neighbornet_get_rooms_json');
     _proposeVote = _dylib!.lookupFunction<_NativeProposeVote, _DartProposeVote>('neighbornet_propose_steward_vote');
     _castVote = _dylib!.lookupFunction<_NativeCastVote, _DartCastVote>('neighbornet_cast_vote');
@@ -415,6 +419,16 @@ class NeighborNetBridge {
       } finally {
         _freeString(ptr);
       }
+    } finally {
+      calloc.free(chPtr);
+    }
+  }
+
+  bool clearChatChannel(String channel) {
+    if (!_isInitialized) return false;
+    final chPtr = channel.toNativeUtf8();
+    try {
+      return _clearChatChannel(chPtr);
     } finally {
       calloc.free(chPtr);
     }
@@ -605,6 +619,16 @@ class NeighborNetBridge {
     } finally {
       calloc.free(namePtr);
       calloc.free(descPtr);
+    }
+  }
+
+  bool deleteRoom(String roomId) {
+    if (!_isInitialized) return false;
+    final idPtr = roomId.toNativeUtf8();
+    try {
+      return _deleteRoom(idPtr);
+    } finally {
+      calloc.free(idPtr);
     }
   }
 

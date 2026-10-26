@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'services/tray_and_window_service.dart';
 import 'state/neighbornet_state.dart';
+import 'models/neighbornet_models.dart';
 import 'views/chat_view.dart';
 import 'views/bulletin_view.dart';
 import 'views/people_view.dart';
@@ -16,6 +19,8 @@ import 'views/traceroute_view.dart';
 import 'views/files_view.dart';
 import 'views/help_view.dart';
 import 'services/voice_chat_service.dart';
+import 'widgets/qr_scanner_dialog.dart';
+import 'widgets/qr_identity_dialog.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
@@ -86,12 +91,36 @@ class _MainShellState extends State<MainShell> {
         final peersCount = widget.state.nearbyCount;
         final hasPeers = peersCount > 0;
 
-        return Scaffold(
-          body: Row(
+        return CallbackShortcuts(
+          bindings: <ShortcutActivator, VoidCallback>{
+            const SingleActivator(LogicalKeyboardKey.keyN, control: true): () => setState(() => _selectedIndex = 0),
+            const SingleActivator(LogicalKeyboardKey.keyO, control: true): () => setState(() => _selectedIndex = 2),
+            const SingleActivator(LogicalKeyboardKey.keyQ, control: true): () => exit(0),
+            const SingleActivator(LogicalKeyboardKey.comma, control: true): () => setState(() => _selectedIndex = 12),
+            const SingleActivator(LogicalKeyboardKey.f1): () => setState(() => _selectedIndex = 13),
+            const SingleActivator(LogicalKeyboardKey.digit1, control: true): () => setState(() => _selectedIndex = 0),
+            const SingleActivator(LogicalKeyboardKey.digit2, control: true): () => setState(() => _selectedIndex = 1),
+            const SingleActivator(LogicalKeyboardKey.digit3, control: true): () => setState(() => _selectedIndex = 2),
+            const SingleActivator(LogicalKeyboardKey.digit4, control: true): () => setState(() => _selectedIndex = 3),
+            const SingleActivator(LogicalKeyboardKey.digit5, control: true): () => setState(() => _selectedIndex = 4),
+            const SingleActivator(LogicalKeyboardKey.digit6, control: true): () => setState(() => _selectedIndex = 5),
+            const SingleActivator(LogicalKeyboardKey.digit7, control: true): () => setState(() => _selectedIndex = 6),
+            const SingleActivator(LogicalKeyboardKey.digit8, control: true): () => setState(() => _selectedIndex = 7),
+            const SingleActivator(LogicalKeyboardKey.digit9, control: true): () => setState(() => _selectedIndex = 8),
+          },
+          child: Focus(
+            autofocus: true,
+            child: Scaffold(
+          body: Column(
             children: [
-              // Left Navigation Sidebar with Scrollbar & Disconnected Help Button
-              SizedBox(
-                width: 255,
+              _buildDesktopMenuBar(context),
+              const Divider(height: 1, thickness: 1),
+              Expanded(
+                child: Row(
+                  children: [
+                    // Left Navigation Sidebar with Scrollbar & Disconnected Help Button
+                    SizedBox(
+                      width: 255,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     return Scrollbar(
@@ -259,7 +288,7 @@ class _MainShellState extends State<MainShell> {
                                 NavigationRailDestination(
                                   icon: const Icon(Icons.settings_outlined),
                                   selectedIcon: const Icon(Icons.settings),
-                                  label: const Text('Settings'),
+                                  label: const Text('Preferences'),
                                 ),
                               ],
                               trailing: Expanded(
@@ -355,8 +384,694 @@ class _MainShellState extends State<MainShell> {
               ),
             ],
           ),
-        );
+        ),
+      ],
+    ),
+  ),
+),
+);
       },
+    );
+  }
+
+  Widget _buildDesktopMenuBar(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      child: MenuBar(
+        style: MenuStyle(
+          backgroundColor: WidgetStateProperty.all(Colors.transparent),
+          elevation: WidgetStateProperty.all(0),
+          padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 4)),
+        ),
+        children: [
+          // FILE MENU
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.add_comment_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyN, control: true),
+                onPressed: () {
+                  setState(() => _selectedIndex = 0);
+                },
+                child: const Text('New Chat Channel / Room'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.upload_file_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyO, control: true),
+                onPressed: () {
+                  setState(() => _selectedIndex = 2);
+                },
+                child: const Text('Share File / Add to Vault...'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                onPressed: () {
+                  final status = widget.state.status;
+                  final myProf = widget.state.myProfile ??
+                      UserProfile(
+                        destHash: status?.destHash ?? '',
+                        nickname: status?.nickname ?? 'Neighbor',
+                      );
+                  QrIdentityDialog.show(context, myProf);
+                },
+                child: const Text('My Tactical QR Identity...'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                onPressed: () => QrScannerDialog.show(context),
+                child: const Text('Scan QR / Add Peer...'),
+              ),
+              const Divider(),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                onPressed: () {
+                  final ch = widget.state.activeChannel;
+                  showDialog(
+                    context: context,
+                    builder: (dCtx) => AlertDialog(
+                      title: const Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+                          SizedBox(width: 8),
+                          Text('Clear Chat Channel'),
+                        ],
+                      ),
+                      content: Text('Clear all message history for #$ch on this node?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dCtx),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                          onPressed: () {
+                            widget.state.clearChat(ch);
+                            Navigator.pop(dCtx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Chat history cleared for #$ch')),
+                            );
+                          },
+                          child: const Text('Clear Chat'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                child: const Text('Clear Active Channel History...'),
+              ),
+              const Divider(),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.close_rounded, size: 18, color: Colors.redAccent),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyQ, control: true),
+                onPressed: () => exit(0),
+                child: const Text('Exit NeighborNet'),
+              ),
+            ],
+            child: const Text('File'),
+          ),
+
+          // EDIT MENU
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.copy_rounded, size: 18),
+                onPressed: () {
+                  final hash = widget.state.status?.destHash ?? '';
+                  if (hash.isNotEmpty) {
+                    Clipboard.setData(ClipboardData(text: hash));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Copied sovereign key hash to clipboard!')),
+                    );
+                  }
+                },
+                child: const Text('Copy Sovereign Key Hash'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                onPressed: () {
+                  widget.state.clearChat(widget.state.activeChannel);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Cleared local buffer for #${widget.state.activeChannel}')),
+                  );
+                },
+                child: const Text('Clear Active Channel Buffer'),
+              ),
+            ],
+            child: const Text('Edit'),
+          ),
+
+          // VIEW MENU
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.chat_bubble_outline, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit1, control: true),
+                onPressed: () => setState(() => _selectedIndex = 0),
+                child: const Text('1. Chat & Channels'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.campaign_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit2, control: true),
+                onPressed: () => setState(() => _selectedIndex = 1),
+                child: const Text('2. Emergency Bulletin'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.folder_shared_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit3, control: true),
+                onPressed: () => setState(() => _selectedIndex = 2),
+                child: const Text('3. Files & Vault'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.assignment_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit4, control: true),
+                onPressed: () => setState(() => _selectedIndex = 3),
+                child: const Text('4. Community Forms'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.storefront_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit5, control: true),
+                onPressed: () => setState(() => _selectedIndex = 4),
+                child: const Text('5. Barter Marketplace'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.radar_rounded, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit6, control: true),
+                onPressed: () => setState(() => _selectedIndex = 5),
+                child: const Text('6. Mesh Radar Map'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.alt_route_rounded, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit7, control: true),
+                onPressed: () => setState(() => _selectedIndex = 6),
+                child: const Text('7. Traceroute Diagnostic'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.people_outline_rounded, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit8, control: true),
+                onPressed: () => setState(() => _selectedIndex = 7),
+                child: const Text('8. People & Nodes'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.phone_in_talk_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.digit9, control: true),
+                onPressed: () => setState(() => _selectedIndex = 8),
+                child: const Text('9. Live Audio & Video Calls'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.radio_outlined, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 9),
+                child: const Text('10. Walkie-Talkie (PTT)'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.medical_services_outlined, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 10),
+                child: const Text('11. Survival Manual'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.warning_amber_rounded, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 11),
+                child: const Text('12. Emergency Broadcast Beacon'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.settings_outlined, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 12),
+                child: const Text('13. Settings'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.help_outline_rounded, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('14. Help & Documentation'),
+              ),
+            ],
+            child: const Text('View'),
+          ),
+
+          // PEERS & GROUPS MENU
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.people_alt_outlined, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 7),
+                child: const Text('Discovered Peers List'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.favorite_border_rounded, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 7),
+                child: const Text('Manage Relationship Groups (Friends/Family)'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.shield_outlined, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 7),
+                child: const Text('Safety & Moderation Lists (Blocked/Restricted)'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.group_work_outlined, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 7),
+                child: const Text('Community Groups'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.lock_outline_rounded, size: 18),
+                onPressed: () => setState(() => _selectedIndex = 0),
+                child: const Text('Direct Whispers (E2EE)'),
+              ),
+            ],
+            child: const Text('Peers & Groups'),
+          ),
+
+          // PREFERENCES MENU
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.palette_outlined, size: 18),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('App Theme & Tactical Profiles'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.router_outlined, size: 18),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('Network Port & Mesh Transport Roles'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.settings_input_antenna_rounded, size: 18),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('LoRa Tactical Radio Hardware Interface'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.language_rounded, size: 18),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('Local Web Gateway & Captive DNS'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.badge_outlined, size: 18),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('Tactical Sovereign Profile & Identity'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.key_rounded, size: 18),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('Backup 48-Word BIP-39 Seed Phrase'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.cleaning_services_outlined, size: 18, color: Colors.redAccent),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('Storage Wipe & Emergency Purge'),
+              ),
+              const Divider(),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.settings_suggest_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.comma, control: true),
+                onPressed: () {
+                  setState(() => _selectedIndex = 12);
+                },
+                child: const Text('All Preferences & Node Configuration'),
+              ),
+            ],
+            child: const Text('Preferences'),
+          ),
+
+          // HELP MENU (Rightmost menu item)
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.cable_rounded, size: 18, color: Colors.teal),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('1. Connecting Two Machines Guide'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.lock_rounded, size: 18, color: Colors.blue),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('2. Direct Whispers (E2EE 1-on-1)'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.alt_route_rounded, size: 18, color: Colors.indigo),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('3. Mesh Relaying (Multi-Hop Relays)'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.medical_services_outlined, size: 18, color: Colors.redAccent),
+                onPressed: () => setState(() => _selectedIndex = 10),
+                child: const Text('4. Emergency Survival Field Manual'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.settings_input_antenna_rounded, size: 18, color: Colors.cyan),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('5. LoRa Radio Hardware Setup'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.build_circle_rounded, size: 18, color: Colors.amber),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('6. Troubleshooting & Firewall Rules'),
+              ),
+              const Divider(),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.help_center_outlined, size: 18),
+                shortcut: const SingleActivator(LogicalKeyboardKey.f1),
+                onPressed: () => setState(() => _selectedIndex = 13),
+                child: const Text('Help Center & Documentation'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.network_check_rounded, size: 18),
+                onPressed: () => _showConnectivityDiagnosticDialog(context),
+                child: const Text('Mesh Socket & Connectivity Diagnostic...'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.keyboard_outlined, size: 18),
+                onPressed: () => _showKeyboardShortcutsDialog(context),
+                child: const Text('Desktop Keyboard Shortcuts Reference...'),
+              ),
+              const Divider(),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.forum_outlined, size: 18, color: Colors.blueAccent),
+                onPressed: () => _showFeedbackAndDiscussionsDialog(context),
+                child: const Text('Community Discussions & Feedback...'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.info_outline_rounded, size: 18),
+                onPressed: () {
+                  showAboutDialog(
+                    context: context,
+                    applicationName: 'NeighborNet',
+                    applicationVersion: '1.0.1',
+                    applicationIcon: const Icon(Icons.hub_rounded, size: 40, color: Colors.blue),
+                    children: const [
+                      SizedBox(height: 10),
+                      Text(
+                        'Decentralized Off-Grid Sovereign Mesh Communication Platform.\n\n'
+                        'Zero Cloud • Pure Local-First Reticulum Cryptographic Mesh • LoRa Ready\n\n'
+                        'Open source software under the MIT License.',
+                      ),
+                    ],
+                  );
+                },
+                child: const Text('About NeighborNet'),
+              ),
+            ],
+            child: const Text('Help'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _launchExternalUrl(String url) {
+    if (Platform.isWindows) {
+      Process.run('cmd', ['/c', 'start', '', url]);
+    } else if (Platform.isMacOS) {
+      Process.run('open', [url]);
+    } else if (Platform.isLinux) {
+      Process.run('xdg-open', [url]);
+    }
+  }
+
+  void _showFeedbackAndDiscussionsDialog(BuildContext context) {
+    const feedbackUrl = 'https://github.com/criticallabs/neighbornet/discussions';
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.forum_outlined, color: Colors.blueAccent),
+            SizedBox(width: 10),
+            Text('Community Discussions & Feedback'),
+          ],
+        ),
+        content: SizedBox(
+          width: 500,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'NeighborNet is 100% decentralized, zero-cloud open source software.',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Join the GitHub community discussions to:\n'
+                '• Propose new mesh features and protocol ideas\n'
+                '• Report bugs, UI glitches, or hardware compatibility issues\n'
+                '• Discuss LoRa transceivers (Heltec, T-Beam, SX1262) and antenna setups\n'
+                '• Share disaster preparedness drills and off-grid community tests',
+                style: TextStyle(fontSize: 13, height: 1.45),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.link_rounded, size: 20, color: Colors.blueAccent),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: SelectableText(
+                        feedbackUrl,
+                        style: TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.blueAccent),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy Link'),
+            onPressed: () {
+              Clipboard.setData(const ClipboardData(text: feedbackUrl));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Discussions URL copied to clipboard!')),
+              );
+            },
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+            label: const Text('Open in Browser'),
+            onPressed: () {
+              _launchExternalUrl(feedbackUrl);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showKeyboardShortcutsDialog(BuildContext context) {
+    const shortcuts = [
+      {'key': 'Ctrl + N', 'desc': 'New Chat Channel / Room'},
+      {'key': 'Ctrl + O', 'desc': 'Share File / Add to Vault'},
+      {'key': 'Ctrl + Q', 'desc': 'Exit NeighborNet'},
+      {'key': 'Ctrl + ,', 'desc': 'Open Preferences & Settings'},
+      {'key': 'F1', 'desc': 'Help Center & Documentation'},
+      {'key': 'Ctrl + 1', 'desc': 'Chat & Channels'},
+      {'key': 'Ctrl + 2', 'desc': 'Emergency Bulletin Board'},
+      {'key': 'Ctrl + 3', 'desc': 'Files & Encrypted Vault'},
+      {'key': 'Ctrl + 4', 'desc': 'Community Forms & Micro-Apps'},
+      {'key': 'Ctrl + 5', 'desc': 'Barter & Resource Marketplace'},
+      {'key': 'Ctrl + 6', 'desc': 'Tactical Mesh Radar Map'},
+      {'key': 'Ctrl + 7', 'desc': 'Mesh Traceroute Diagnostic'},
+      {'key': 'Ctrl + 8', 'desc': 'People & Nodes Roster'},
+      {'key': 'Ctrl + 9', 'desc': 'Live Audio & Video Calls'},
+    ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.keyboard_outlined, color: Colors.teal),
+            SizedBox(width: 10),
+            Text('Desktop Keyboard Shortcuts'),
+          ],
+        ),
+        content: SizedBox(
+          width: 480,
+          height: 380,
+          child: ListView.separated(
+            itemCount: shortcuts.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (c, idx) {
+              final s = shortcuts[idx];
+              return ListTile(
+                dense: true,
+                visualDensity: VisualDensity.compact,
+                title: Text(s['desc']!, style: const TextStyle(fontSize: 13)),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+                  ),
+                  child: Text(
+                    s['key']!,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showConnectivityDiagnosticDialog(BuildContext context) {
+    final status = widget.state.status;
+    final peers = widget.state.peers;
+    final lora = widget.state.loraStatus;
+    final myHash = status?.destHash ?? 'Unknown';
+    final myNick = status?.nickname ?? 'Neighbor';
+    final isGatewayRunning = widget.state.isWebGatewayRunning;
+    final gwPort = widget.state.webGatewayPort;
+
+    final report = 'NeighborNet v1.0.1 Connectivity Report\n'
+        'Node: $myNick\n'
+        'Hash: $myHash\n'
+        'UDP Mesh Port: 42424 (Active)\n'
+        'Active Peers: ${peers.length}\n'
+        'LoRa Hardware: ${lora?.isConnected == true ? "Connected (${lora?.portName})" : "Disconnected"}\n'
+        'Web Gateway: ${isGatewayRunning ? "Running on :$gwPort" : "Offline"}';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.network_check_rounded, color: Colors.green),
+            SizedBox(width: 10),
+            Text('Mesh Diagnostic & Telemetry'),
+          ],
+        ),
+        content: SizedBox(
+          width: 500,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  backgroundColor: peers.isNotEmpty ? Colors.green.withValues(alpha: 0.2) : Colors.amber.withValues(alpha: 0.2),
+                  child: Icon(
+                    peers.isNotEmpty ? Icons.check_circle_outline : Icons.sensors_rounded,
+                    color: peers.isNotEmpty ? Colors.green : Colors.amber,
+                  ),
+                ),
+                title: Text(
+                  peers.isNotEmpty ? '${peers.length} Nearby Peer(s) Connected' : 'Searching for Nearby Mesh Peers...',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: const Text('UDP Port 42424 multicast / broadcast socket active'),
+              ),
+              const Divider(height: 16),
+              Text('Node Identity: $myNick', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              SelectableText('Address Hash: $myHash', style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('LoRa Radio', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                          const SizedBox(height: 2),
+                          Text(
+                            lora?.isConnected == true ? 'Connected' : 'Disconnected',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              color: lora?.isConnected == true ? Colors.green : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Web Gateway', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                          const SizedBox(height: 2),
+                          Text(
+                            isGatewayRunning ? 'Port :$gwPort' : 'Disabled',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              color: isGatewayRunning ? Colors.green : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy Diagnostic Report'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: report));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Diagnostic report copied to clipboard!')),
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 

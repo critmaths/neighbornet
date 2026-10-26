@@ -21,6 +21,7 @@ fn test_default_schemas_seeded_and_queryable() {
     assert_eq!(triage.title, "Disaster Medical Triage (START)");
     assert!(triage.fields.iter().any(|f| f.id == "triage_color"));
     assert!(triage.fields.iter().any(|f| f.id == "patient_tag"));
+    node.stop();
 }
 
 #[test]
@@ -82,6 +83,7 @@ fn test_create_custom_schema_and_submit_entries() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, entry.id);
     assert_eq!(entries[0].data_json, data_json);
+    node.stop();
 }
 
 #[test]
@@ -89,13 +91,18 @@ fn test_mesh_form_and_entry_sync_between_nodes() {
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
 
-    let node_a = NeighborNode::new(dir_a.path().to_path_buf(), 47130, false).unwrap();
+    let node_a = NeighborNode::new(dir_a.path().to_path_buf(), 0, false).unwrap();
     node_a.set_nickname("Medic Lead".to_string());
 
-    let node_b = NeighborNode::new(dir_b.path().to_path_buf(), 47140, true).unwrap();
+    let node_b = NeighborNode::new(dir_b.path().to_path_buf(), 0, false).unwrap();
     node_b.set_nickname("Field Hospital Relay".to_string());
 
-    node_a.connect_peer("127.0.0.1:47140".parse().unwrap());
+    let port_a = node_a.get_status().listen_port;
+    let port_b = node_b.get_status().listen_port;
+
+    node_a.connect_peer(format!("127.0.0.1:{}", port_b).parse().unwrap());
+    node_b.connect_peer(format!("127.0.0.1:{}", port_a).parse().unwrap());
+    thread::sleep(Duration::from_millis(300));
 
     // Node A creates a triage entry
     let triage_data = serde_json::json!({
@@ -122,4 +129,6 @@ fn test_mesh_form_and_entry_sync_between_nodes() {
         }
     }
     assert!(synced, "Node B failed to sync form entry from Node A over mesh DAG");
+    node_a.stop();
+    node_b.stop();
 }

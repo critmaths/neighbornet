@@ -1,5 +1,5 @@
 // ignore_for_file: deprecated_member_use
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, File, exit;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/legacy.dart';
@@ -66,7 +66,22 @@ class TrayAndWindowService extends ChangeNotifier with TrayListener, WindowListe
     if (!_isDesktop) return;
 
     try {
-      final iconPath = Platform.isWindows ? 'assets/app_icon.ico' : 'assets/app_icon.png';
+      String iconPath = Platform.isWindows ? 'assets/app_icon.ico' : 'assets/app_icon.png';
+      if (Platform.isWindows) {
+        try {
+          final exeDir = File(Platform.resolvedExecutable).parent.path;
+          final cand1 = '$exeDir\\data\\flutter_assets\\assets\\app_icon.ico';
+          final cand2 = '$exeDir\\assets\\app_icon.ico';
+          final cand3 = '$exeDir\\app_icon.ico';
+          if (File(cand1).existsSync()) {
+            iconPath = cand1;
+          } else if (File(cand2).existsSync()) {
+            iconPath = cand2;
+          } else if (File(cand3).existsSync()) {
+            iconPath = cand3;
+          }
+        } catch (_) {}
+      }
       await trayManager.setIcon(iconPath);
       await trayManager.setToolTip('NeighborNet - Community Mesh');
 
@@ -148,6 +163,7 @@ class TrayAndWindowService extends ChangeNotifier with TrayListener, WindowListe
     } catch (e) {
       debugPrint('[TrayAndWindowService] Error destroying window/tray: $e');
     }
+    exit(0);
   }
 
   // WindowListener Callbacks

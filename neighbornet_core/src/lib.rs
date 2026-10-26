@@ -343,6 +343,9 @@ pub enum WireEnvelope {
         chunk_data_base64: String,
     },
     RoomAnnounce(RoomMeta),
+    RoomDelete {
+        room_id: String,
+    },
     VoteProposal(StewardVote),
     VoteBallot {
         proposal_id: String,
@@ -359,7 +362,9 @@ pub enum WireEnvelope {
     PttVoice(PttVoiceChunk),
     PttFloor(PttFloorSignal),
     MarkerAnnounce(TacticalMarker),
-    MarkerDelete(String),
+    MarkerDelete {
+        marker_id: String,
+    },
     TraceRequest(TraceroutePacket),
     TraceResponse(TraceroutePacket),
     BarterListingAnnounce(BarterListing),
@@ -428,6 +433,7 @@ pub struct NodeInner {
     pub bulletins: RwLock<HashMap<String, BulletinPost>>,
     pub files: RwLock<HashMap<String, SharedFileMeta>>,
     pub rooms: RwLock<HashMap<String, RoomMeta>>,
+    pub deleted_rooms: RwLock<HashSet<String>>,
     pub proposals: RwLock<HashMap<String, StewardVote>>,
     pub audit_log: RwLock<HashMap<String, Vec<GovernanceEvent>>>,
     pub form_schemas: RwLock<HashMap<String, FormSchema>>,
@@ -944,19 +950,57 @@ impl NeighborNode {
             }
         }
 
-        // Load existing rooms
-        let mut loaded_rooms = HashMap::new();
+        // Load deleted rooms
+        let deleted_rooms_path = data_dir.join("deleted_rooms.json");
+        let mut loaded_deleted_rooms: HashSet<String> = HashSet::new();
+        if let Ok(content) = fs::read_to_string(&deleted_rooms_path) {
+            if let Ok(set) = serde_json::from_str::<HashSet<String>>(&content) {
+                loaded_deleted_rooms = set;
+            }
+        }
+
+        // Load existing rooms, automatically deduplicating rooms with identical names (case-insensitive)
+        let mut loaded_rooms: HashMap<String, RoomMeta> = HashMap::new();
+        let mut rooms_by_name: HashMap<String, RoomMeta> = HashMap::new();
+        let mut duplicates_to_delete: Vec<String> = Vec::new();
+
         let rooms_dir = data_dir.join("rooms");
         if let Ok(entries) = fs::read_dir(&rooms_dir) {
             for entry in entries.flatten() {
                 if entry.path().extension().and_then(|e| e.to_str()) == Some("json") {
                     if let Ok(content) = fs::read_to_string(entry.path()) {
                         if let Ok(room) = serde_json::from_str::<RoomMeta>(&content) {
-                            loaded_rooms.insert(room.id.clone(), room);
+                            if loaded_deleted_rooms.contains(&room.id) {
+                                let _ = fs::remove_file(entry.path());
+                                continue;
+                            }
+                            let norm_name = room.name.trim().to_lowercase();
+                            if let Some(existing) = rooms_by_name.get(&norm_name) {
+                                if room.created_sec < existing.created_sec {
+                                    duplicates_to_delete.push(existing.id.clone());
+                                    rooms_by_name.insert(norm_name, room);
+                                } else {
+                                    duplicates_to_delete.push(room.id.clone());
+                                }
+                            } else {
+                                rooms_by_name.insert(norm_name, room);
+                            }
                         }
                     }
                 }
             }
+        }
+
+        for dup_id in duplicates_to_delete {
+            let _ = fs::remove_file(rooms_dir.join(format!("{}.json", dup_id)));
+            loaded_deleted_rooms.insert(dup_id);
+        }
+        if let Ok(json) = serde_json::to_string(&loaded_deleted_rooms) {
+            let _ = fs::write(&deleted_rooms_path, json);
+        }
+
+        for room in rooms_by_name.into_values() {
+            loaded_rooms.insert(room.id.clone(), room);
         }
 
         let db_path = data_dir.join("neighbornet.db");
@@ -1394,6 +1438,7 @@ impl NeighborNode {
             bulletins: RwLock::new(loaded_bulletins),
             files: RwLock::new(loaded_files),
             rooms: RwLock::new(loaded_rooms),
+            deleted_rooms: RwLock::new(loaded_deleted_rooms),
             proposals: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(HashMap::new()),
             form_schemas: RwLock::new(loaded_schemas),
@@ -1520,6 +1565,7 @@ impl NeighborNode {
             );
         }
         profiles.insert(self.inner.dest_hash_hex.clone(), prof.clone());
+        drop(profiles);
         let envelope = WireEnvelope::ProfileAnnounce(prof);
         self.broadcast_envelope(&envelope);
     }
@@ -1699,6 +1745,29 @@ impl NeighborNode {
         msgs
     }
 
+    pub fn clear_chat_channel(&self, channel: &str) -> bool {
+        let is_dm = channel.starts_with("dm_");
+        let my_dm = format!("dm_{}", self.inner.dest_hash_hex);
+        let peer_hash = if is_dm { &channel["dm_".len()..] } else { "" };
+
+        if let Ok(db) = self.inner.db.lock() {
+            let res = if is_dm {
+                db.execute(
+                    "DELETE FROM messages WHERE channel = ?1 OR (channel = ?2 AND sender_hash = ?3)",
+                    rusqlite::params![channel, my_dm, peer_hash],
+                )
+            } else {
+                db.execute(
+                    "DELETE FROM messages WHERE channel = ?1",
+                    rusqlite::params![channel],
+                )
+            };
+            res.is_ok()
+        } else {
+            false
+        }
+    }
+
     // --- TACTICAL MESH MAP & COMMUNITY MARKERS ---
 
     pub fn get_markers(&self) -> Vec<TacticalMarker> {
@@ -1750,7 +1819,9 @@ impl NeighborNode {
         if let Ok(db) = self.inner.db.lock() {
             let _ = db.execute("DELETE FROM markers WHERE id = ?1", rusqlite::params![marker_id]);
         }
-        let envelope = WireEnvelope::MarkerDelete(marker_id.to_string());
+        let envelope = WireEnvelope::MarkerDelete {
+            marker_id: marker_id.to_string(),
+        };
         self.broadcast_envelope(&envelope);
         true
     }
@@ -2300,13 +2371,18 @@ impl NeighborNode {
     // --- DYNAMIC ROOMS & DEMOCRATIC GOVERNANCE SUBSYSTEM ---
 
     pub fn create_room(&self, name: String, description: String, is_private: bool) -> RoomMeta {
+        let clean_name = name.trim().to_string();
+        if let Some(existing) = self.inner.rooms.read().values().find(|r| r.name.eq_ignore_ascii_case(&clean_name)) {
+            return existing.clone();
+        }
+
         let timestamp = current_epoch_sec();
-        let raw_id = format!("{}:{}:{}", self.inner.dest_hash_hex, name, timestamp);
+        let raw_id = format!("{}:{}:{}", self.inner.dest_hash_hex, clean_name, timestamp);
         let id = format!("room_{}", &compute_hash(&raw_id)[..16]);
 
         let room = RoomMeta {
             id: id.clone(),
-            name,
+            name: clean_name,
             description,
             creator_hash: self.inner.dest_hash_hex.clone(),
             creator_nickname: self.inner.nickname.read().clone(),
@@ -2329,6 +2405,43 @@ impl NeighborNode {
         self.broadcast_envelope(&envelope);
 
         room
+    }
+
+    pub fn delete_room(&self, room_id: &str) -> bool {
+        let mut rooms = self.inner.rooms.write();
+        if rooms.remove(room_id).is_some() {
+            drop(rooms);
+
+            let mut del_rooms = self.inner.deleted_rooms.write();
+            del_rooms.insert(room_id.to_string());
+            let del_set = del_rooms.clone();
+            drop(del_rooms);
+
+            let del_path = self.inner.data_dir.join("deleted_rooms.json");
+            if let Ok(json) = serde_json::to_string(&del_set) {
+                let _ = fs::write(del_path, json);
+            }
+
+            let room_file = self.inner.data_dir.join("rooms").join(format!("{}.json", room_id));
+            let _ = fs::remove_file(room_file);
+
+            {
+                let mut msgs = self.inner.messages.write();
+                msgs.retain(|m| m.channel != room_id);
+            }
+            if let Ok(db) = self.inner.db.lock() {
+                let _ = db.execute("DELETE FROM messages WHERE channel = ?1", rusqlite::params![room_id]);
+            }
+
+            let envelope = WireEnvelope::RoomDelete {
+                room_id: room_id.to_string(),
+            };
+            self.broadcast_envelope(&envelope);
+
+            true
+        } else {
+            false
+        }
     }
 
     pub fn get_rooms(&self) -> Vec<RoomMeta> {
@@ -2416,73 +2529,7 @@ impl NeighborNode {
     }
 
     fn evaluate_vote_quorum(&self, proposal_id: &str) {
-        let mut proposals = self.inner.proposals.write();
-        let vote = match proposals.get_mut(proposal_id) {
-            Some(v) => v,
-            None => return,
-        };
-
-        if vote.status != "pending" {
-            return;
-        }
-
-        // Active community participants = connected peers + self
-        let total_nodes = self.inner.peers.read().len() + 1;
-        let required_for_majority = if total_nodes <= 1 {
-            1
-        } else if total_nodes == 2 {
-            2 // Unanimous consensus for 2 people
-        } else {
-            (total_nodes / 2) + 1 // Democratic majority
-        };
-
-        if vote.votes_for.len() >= required_for_majority {
-            vote.status = "passed".to_string();
-
-            // Execute promotion / demotion on Room
-            let mut rooms = self.inner.rooms.write();
-            if let Some(room) = rooms.get_mut(&vote.room_id) {
-                if vote.action == "promote" {
-                    if !room.stewards.contains(&vote.target_hash) {
-                        room.stewards.push(vote.target_hash.clone());
-                    }
-                } else if vote.action == "demote" {
-                    room.stewards.retain(|h| h != &vote.target_hash);
-                }
-
-                // Persist updated room
-                let rooms_dir = self.inner.data_dir.join("rooms");
-                if let Ok(json) = serde_json::to_string_pretty(&room) {
-                    let _ = fs::write(rooms_dir.join(format!("{}.json", room.id)), json);
-                }
-            }
-
-            // Create immutable Governance Audit Log Event
-            let event = GovernanceEvent {
-                event_id: format!("event_{}", &compute_hash(&format!("{}:{}", vote.proposal_id, current_epoch_sec()))[..16]),
-                room_id: vote.room_id.clone(),
-                summary: format!(
-                    "Steward {} was {} by democratic community vote ({} in favor)",
-                    vote.target_nickname,
-                    if vote.action == "promote" { "promoted" } else { "demoted" },
-                    vote.votes_for.len()
-                ),
-                reason: format!("{}: {}", vote.reason_category, vote.reason_details),
-                timestamp_sec: current_epoch_sec(),
-            };
-
-            let mut audit_log = self.inner.audit_log.write();
-            audit_log.entry(vote.room_id.clone()).or_default().push(event.clone());
-
-            let gov_env = WireEnvelope::GovernanceEventBroadcast(event);
-            drop(audit_log);
-            drop(rooms);
-            drop(proposals);
-
-            self.broadcast_envelope(&gov_env);
-        } else if vote.votes_against.len() > total_nodes.saturating_sub(required_for_majority) {
-            vote.status = "rejected".to_string();
-        }
+        inner_evaluate_vote_quorum(&self.inner, &self.inner.socket, proposal_id);
     }
 
     pub fn get_proposals(&self, room_id: &str) -> Vec<StewardVote> {
@@ -3331,6 +3378,86 @@ fn relay_envelope_if_transport(inner: &Arc<NodeInner>, socket: &UdpSocket, envel
     }
 }
 
+fn inner_evaluate_vote_quorum(inner: &Arc<NodeInner>, socket: &UdpSocket, proposal_id: &str) {
+    let mut proposals = inner.proposals.write();
+    let vote = match proposals.get_mut(proposal_id) {
+        Some(v) => v,
+        None => return,
+    };
+
+    if vote.status != "pending" {
+        return;
+    }
+
+    // Active community participants = connected peers + self
+    let total_nodes = inner.peers.read().len() + 1;
+    let required_for_majority = if total_nodes <= 1 {
+        1
+    } else if total_nodes == 2 {
+        2 // Unanimous consensus for 2 people
+    } else {
+        (total_nodes / 2) + 1 // Democratic majority
+    };
+
+    if vote.votes_for.len() >= required_for_majority {
+        vote.status = "passed".to_string();
+
+        // Execute promotion / demotion on Room
+        let mut rooms = inner.rooms.write();
+        if let Some(room) = rooms.get_mut(&vote.room_id) {
+            if vote.action == "promote" {
+                if !room.stewards.contains(&vote.target_hash) {
+                    room.stewards.push(vote.target_hash.clone());
+                }
+            } else if vote.action == "demote" {
+                room.stewards.retain(|h| h != &vote.target_hash);
+            }
+
+            // Persist updated room
+            let rooms_dir = inner.data_dir.join("rooms");
+            if let Ok(json) = serde_json::to_string_pretty(&room) {
+                let _ = fs::write(rooms_dir.join(format!("{}.json", room.id)), json);
+            }
+        }
+
+        // Create immutable Governance Audit Log Event
+        let event = GovernanceEvent {
+            event_id: format!("event_{}", &compute_hash(&format!("{}:{}", vote.proposal_id, current_epoch_sec()))[..16]),
+            room_id: vote.room_id.clone(),
+            summary: format!(
+                "Steward {} was {} by democratic community vote ({} in favor)",
+                vote.target_nickname,
+                if vote.action == "promote" { "promoted" } else { "demoted" },
+                vote.votes_for.len()
+            ),
+            reason: format!("{}: {}", vote.reason_category, vote.reason_details),
+            timestamp_sec: current_epoch_sec(),
+        };
+
+        let mut audit_log = inner.audit_log.write();
+        audit_log.entry(vote.room_id.clone()).or_default().push(event.clone());
+
+        let gov_env = WireEnvelope::GovernanceEventBroadcast(event);
+        drop(audit_log);
+        drop(rooms);
+        drop(proposals);
+
+        if let Ok(json) = serde_json::to_string(&gov_env) {
+            let _ = socket.send_to(json.as_bytes(), "255.255.255.255:42424");
+            let _ = socket.send_to(json.as_bytes(), "127.0.0.1:42424");
+            let peer_addrs: Vec<String> = inner.peers.read().values().map(|p| p.addr.clone()).collect();
+            for addr in peer_addrs {
+                if let Ok(dest) = addr.parse::<SocketAddr>() {
+                    let _ = socket.send_to(json.as_bytes(), dest);
+                }
+            }
+            let _ = inner.lora_manager.send_packet(json.as_bytes());
+        }
+    } else if vote.votes_against.len() > total_nodes.saturating_sub(required_for_majority) {
+        vote.status = "rejected".to_string();
+    }
+}
+
 fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnvelope, src: SocketAddr) {
     match envelope {
         WireEnvelope::Announce {
@@ -3345,18 +3472,21 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 return;
             }
 
-            let mut peers = inner.peers.write();
-            let is_new = !peers.contains_key(&dest_hash);
-            peers.insert(
-                dest_hash.clone(),
-                PeerInfo {
-                    dest_hash: dest_hash.clone(),
-                    nickname,
-                    addr: src.to_string(),
-                    is_transport,
-                    last_seen_epoch_sec: current_epoch_sec(),
-                },
-            );
+            let is_new = {
+                let mut peers = inner.peers.write();
+                let is_new = !peers.contains_key(&dest_hash);
+                peers.insert(
+                    dest_hash.clone(),
+                    PeerInfo {
+                        dest_hash: dest_hash.clone(),
+                        nickname,
+                        addr: src.to_string(),
+                        is_transport,
+                        last_seen_epoch_sec: current_epoch_sec(),
+                    },
+                );
+                is_new
+            };
 
             // Respond immediately if newly discovered peer
             if is_new {
@@ -3380,7 +3510,8 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             if is_new || bulletin_count > my_b_count || file_count > my_f_count || room_count > my_r_count {
                 let known_b_ids: Vec<String> = inner.bulletins.read().keys().cloned().collect();
                 let known_f_hashes: Vec<String> = inner.files.read().keys().cloned().collect();
-                let known_r_ids: Vec<String> = inner.rooms.read().keys().cloned().collect();
+                let mut known_r_ids: Vec<String> = inner.rooms.read().keys().cloned().collect();
+                known_r_ids.extend(inner.deleted_rooms.read().iter().cloned());
                 let known_s_ids: Vec<String> = inner.form_schemas.read().keys().cloned().collect();
                 let known_e_ids: Vec<String> = inner.form_entries.read().values().flat_map(|v| v.iter().map(|e| e.id.clone())).collect();
                 let known_p_hashes: Vec<String> = inner.user_profiles.read().keys().cloned().collect();
@@ -3633,7 +3764,14 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             }
 
             let mut stored_r = inner.rooms.write();
+            let del_rooms = inner.deleted_rooms.read();
             for r in rooms {
+                if del_rooms.contains(&r.id) {
+                    continue;
+                }
+                if stored_r.values().any(|existing| existing.name.eq_ignore_ascii_case(&r.name)) {
+                    continue;
+                }
                 if !stored_r.contains_key(&r.id) {
                     let rooms_dir = inner.data_dir.join("rooms");
                     let _ = fs::create_dir_all(&rooms_dir);
@@ -3977,14 +4115,47 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             }
         }
         WireEnvelope::RoomAnnounce(room) => {
+            if inner.deleted_rooms.read().contains(&room.id) {
+                return;
+            }
             let mut rooms = inner.rooms.write();
+            if rooms.values().any(|r| r.name.eq_ignore_ascii_case(&room.name) && r.id != room.id) {
+                return;
+            }
             if !rooms.contains_key(&room.id) {
                 let rooms_dir = inner.data_dir.join("rooms");
                 let _ = fs::create_dir_all(&rooms_dir);
                 if let Ok(json) = serde_json::to_string_pretty(&room) {
                     let _ = fs::write(rooms_dir.join(format!("{}.json", room.id)), json);
                 }
-                rooms.insert(room.id.clone(), room);
+                rooms.insert(room.id.clone(), room.clone());
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::RoomAnnounce(room), src);
+            }
+        }
+        WireEnvelope::RoomDelete { room_id } => {
+            let mut del_rooms = inner.deleted_rooms.write();
+            if del_rooms.insert(room_id.clone()) {
+                let del_set = del_rooms.clone();
+                drop(del_rooms);
+
+                let del_path = inner.data_dir.join("deleted_rooms.json");
+                if let Ok(json) = serde_json::to_string(&del_set) {
+                    let _ = fs::write(del_path, json);
+                }
+
+                inner.rooms.write().remove(&room_id);
+                let room_file = inner.data_dir.join("rooms").join(format!("{}.json", room_id));
+                let _ = fs::remove_file(room_file);
+
+                {
+                    let mut msgs = inner.messages.write();
+                    msgs.retain(|m| m.channel != room_id);
+                }
+                if let Ok(db) = inner.db.lock() {
+                    let _ = db.execute("DELETE FROM messages WHERE channel = ?1", rusqlite::params![room_id]);
+                }
+
+                relay_envelope_if_transport(inner, socket, &WireEnvelope::RoomDelete { room_id }, src);
             }
         }
         WireEnvelope::VoteProposal(vote) => {
@@ -3998,18 +4169,21 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
             voter_hash,
             approve,
         } => {
-            let mut proposals = inner.proposals.write();
-            if let Some(vote) = proposals.get_mut(&proposal_id) {
-                if vote.status == "pending" {
-                    vote.votes_for.retain(|h| h != &voter_hash);
-                    vote.votes_against.retain(|h| h != &voter_hash);
-                    if approve {
-                        vote.votes_for.push(voter_hash);
-                    } else {
-                        vote.votes_against.push(voter_hash);
+            {
+                let mut proposals = inner.proposals.write();
+                if let Some(vote) = proposals.get_mut(&proposal_id) {
+                    if vote.status == "pending" {
+                        vote.votes_for.retain(|h| h != &voter_hash);
+                        vote.votes_against.retain(|h| h != &voter_hash);
+                        if approve {
+                            vote.votes_for.push(voter_hash);
+                        } else {
+                            vote.votes_against.push(voter_hash);
+                        }
                     }
                 }
             }
+            inner_evaluate_vote_quorum(inner, socket, &proposal_id);
         }
         WireEnvelope::GovernanceEventBroadcast(event) => {
             let mut audit_log = inner.audit_log.write();
@@ -4049,7 +4223,7 @@ fn handle_envelope(inner: &Arc<NodeInner>, socket: &UdpSocket, envelope: WireEnv
                 inner.markers.write().insert(marker.id.clone(), marker);
             }
         }
-        WireEnvelope::MarkerDelete(marker_id) => {
+        WireEnvelope::MarkerDelete { marker_id } => {
             inner.markers.write().remove(&marker_id);
             if let Ok(db) = inner.db.lock() {
                 let _ = db.execute("DELETE FROM markers WHERE id = ?1", rusqlite::params![marker_id]);
@@ -4406,6 +4580,20 @@ pub extern "C" fn neighbornet_get_chat_history_json(channel_c: *const c_char) ->
 }
 
 #[no_mangle]
+pub extern "C" fn neighbornet_clear_chat_channel(channel_c: *const c_char) -> bool {
+    if channel_c.is_null() {
+        return false;
+    }
+    let channel = unsafe { CStr::from_ptr(channel_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+    node.clear_chat_channel(&channel)
+}
+
+#[no_mangle]
 pub extern "C" fn neighbornet_post_bulletin(
     title_c: *const c_char,
     body_c: *const c_char,
@@ -4678,6 +4866,21 @@ pub extern "C" fn neighbornet_get_rooms_json() -> *mut c_char {
     let rooms = node.get_rooms();
     let json = serde_json::to_string(&rooms).unwrap_or_else(|_| "[]".to_string());
     to_c_string(json)
+}
+
+#[no_mangle]
+pub extern "C" fn neighbornet_delete_room(room_id_c: *const c_char) -> bool {
+    if room_id_c.is_null() {
+        return false;
+    }
+    let room_id = unsafe { CStr::from_ptr(room_id_c).to_string_lossy().into_owned() };
+    let lock = GLOBAL_NODE.read();
+    let node = match lock.as_ref() {
+        Some(n) => n,
+        None => return false,
+    };
+
+    node.delete_room(&room_id)
 }
 
 #[no_mangle]

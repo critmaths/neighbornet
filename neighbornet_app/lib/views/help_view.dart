@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../state/neighbornet_state.dart';
@@ -327,7 +328,29 @@ When an emergency happens and nobody else has the app installed:
 
 3. **Offline App Download**:
    • In the Web Portal, they tap **"📥 Get App (Offline)"**.
-   • They can download `NeighborNet.apk` (Android) or `NeighborNet.zip` (Windows) directly from your device over local Wi-Fi at 50+ Mbps with 0 cellular data!
+    • They can download `NeighborNet.apk` (Android) or `NeighborNet.zip` (Windows) directly from your device over local Wi-Fi at 50+ Mbps with 0 cellular data!
+''',
+    },
+    {
+      'id': 'github_feedback',
+      'category': 'Quick Start',
+      'title': '13. Community Feedback & GitHub Discussions',
+      'icon': Icons.forum_rounded,
+      'color': Colors.blueAccent,
+      'summary': 'Join developer discussions, suggest new features, report bugs, and collaborate.',
+      'content': '''
+### Community Discussions & Feedback:
+
+NeighborNet is an open-source sovereign communication mesh built for local communities, disaster response, and off-grid coordination.
+
+• **Official GitHub Discussions URL**:
+  https://github.com/criticallabs/neighbornet/discussions
+
+• **How to Contribute & Connect**:
+  1. **Feature Proposals**: Suggest new radio protocols, mesh codecs, emergency workflows, or tactical UI enhancements.
+  2. **Hardware Compatibility Reports**: Share test results with Heltec V3, LilyGO T-Beam, SX1262 modems, and custom serial transceivers.
+  3. **Bug Reports & UI Feedback**: Report glitches, platform quirks, or edge cases to improve mesh stability.
+  4. **Field Deployment Drills**: Share stories of neighborhood testing, power-outage simulations, and long-range relay setups!
 ''',
     },
   ];
@@ -357,6 +380,95 @@ When an emergency happens and nobody else has the app installed:
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  void _showDiscussionsDialog(BuildContext context) {
+    const feedbackUrl = 'https://github.com/criticallabs/neighbornet/discussions';
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.forum_outlined, color: Colors.blueAccent),
+            SizedBox(width: 10),
+            Text('Community Discussions & Feedback'),
+          ],
+        ),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'NeighborNet is 100% open-source and decentralized.',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Join our community discussions on GitHub to collaborate, submit feedback, report issues, and propose new features directly with developers and mesh operators.',
+                style: TextStyle(fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.link_rounded, size: 20, color: Colors.blueAccent),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: SelectableText(
+                        feedbackUrl,
+                        style: TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.blueAccent),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy Link'),
+            onPressed: () {
+              Clipboard.setData(const ClipboardData(text: feedbackUrl));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Discussions URL copied to clipboard!')),
+              );
+            },
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+            label: const Text('Open in Browser'),
+            onPressed: () {
+              _launchExternalUrl(feedbackUrl);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _launchExternalUrl(String url) {
+    if (Platform.isWindows) {
+      Process.run('cmd', ['/c', 'start', '', url]);
+    } else if (Platform.isMacOS) {
+      Process.run('open', [url]);
+    } else if (Platform.isLinux) {
+      Process.run('xdg-open', [url]);
+    }
   }
 
   @override
@@ -408,6 +520,12 @@ When an emergency happens and nobody else has the app installed:
                           ),
                         ],
                       ),
+                    ),
+                    const SizedBox(width: 12),
+                    FilledButton.tonalIcon(
+                      icon: const Icon(Icons.forum_outlined, size: 16),
+                      label: const Text('Discussions & Feedback', style: TextStyle(fontSize: 12)),
+                      onPressed: () => _showDiscussionsDialog(context),
                     ),
                   ],
                 ),
@@ -610,3 +728,4 @@ When an emergency happens and nobody else has the app installed:
     );
   }
 }
+

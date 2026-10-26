@@ -10,23 +10,27 @@ fn test_democratic_room_stewardship_and_audit_trail() {
     let dir_b = tempfile::tempdir().unwrap();
     let dir_c = tempfile::tempdir().unwrap();
 
-    // 1. Launch 3 Nodes: Alice (47110), Bob (47120), Charlie (47130)
-    println!("Step 1: Starting Alice (47110), Bob (47120), Charlie (47130)...");
-    let node_a = NeighborNode::new(dir_a.path().to_path_buf(), 47110, false).unwrap();
+    // 1. Launch 3 Nodes: Alice, Bob, Charlie using dynamic ports
+    println!("Step 1: Starting Alice, Bob, Charlie with dynamic ports...");
+    let node_a = NeighborNode::new(dir_a.path().to_path_buf(), 0, false).unwrap();
     node_a.set_nickname("Alice Organizer".to_string());
 
-    let node_b = NeighborNode::new(dir_b.path().to_path_buf(), 47120, false).unwrap();
+    let node_b = NeighborNode::new(dir_b.path().to_path_buf(), 0, false).unwrap();
     node_b.set_nickname("Bob Member".to_string());
 
-    let node_c = NeighborNode::new(dir_c.path().to_path_buf(), 47130, false).unwrap();
+    let node_c = NeighborNode::new(dir_c.path().to_path_buf(), 0, false).unwrap();
     node_c.set_nickname("Charlie Elder".to_string());
 
-    node_a.connect_peer("127.0.0.1:47120".parse().unwrap());
-    node_a.connect_peer("127.0.0.1:47130".parse().unwrap());
-    node_b.connect_peer("127.0.0.1:47110".parse().unwrap());
-    node_b.connect_peer("127.0.0.1:47130".parse().unwrap());
-    node_c.connect_peer("127.0.0.1:47110".parse().unwrap());
-    node_c.connect_peer("127.0.0.1:47120".parse().unwrap());
+    let port_a = node_a.get_status().listen_port;
+    let port_b = node_b.get_status().listen_port;
+    let port_c = node_c.get_status().listen_port;
+
+    node_a.connect_peer(format!("127.0.0.1:{}", port_b).parse().unwrap());
+    node_a.connect_peer(format!("127.0.0.1:{}", port_c).parse().unwrap());
+    node_b.connect_peer(format!("127.0.0.1:{}", port_a).parse().unwrap());
+    node_b.connect_peer(format!("127.0.0.1:{}", port_c).parse().unwrap());
+    node_c.connect_peer(format!("127.0.0.1:{}", port_a).parse().unwrap());
+    node_c.connect_peer(format!("127.0.0.1:{}", port_b).parse().unwrap());
 
     thread::sleep(Duration::from_millis(500));
 

@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/neighbornet_models.dart';
 import '../services/voice_memo_service.dart';
 import '../state/neighbornet_state.dart';
@@ -93,60 +94,75 @@ class _ChatViewState extends State<ChatView> {
   void _showCreateRoomDialog() {
     final nameCtrl = TextEditingController();
     final descCtrl = TextEditingController();
+    String? errorText;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.add_circle_outline, color: Colors.teal),
-            SizedBox(width: 8),
-            Text('Create Community Room'),
-          ],
-        ),
-        content: SizedBox(
-          width: 440,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Row(
             children: [
-              const Text(
-                'Create a sovereign community room. You will automatically become the initial Genesis Steward.',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Room Name',
-                  hintText: 'e.g. water-distribution, first-responders',
-                  prefixText: '# ',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: descCtrl,
-                maxLines: 2,
-                decoration: const InputDecoration(
-                  labelText: 'Description / Purpose',
-                  hintText: 'e.g. Daily tanker schedules and water filtration points',
-                ),
-              ),
+              Icon(Icons.add_circle_outline, color: Colors.teal),
+              SizedBox(width: 8),
+              Text('Create Community Room'),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Create a sovereign community room. You will automatically become the initial Genesis Steward.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Room Name',
+                    hintText: 'e.g. water-distribution, first-responders',
+                    prefixText: '# ',
+                    errorText: errorText,
+                  ),
+                  onChanged: (_) {
+                    if (errorText != null) {
+                      setDialogState(() => errorText = null);
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Description / Purpose',
+                    hintText: 'e.g. Daily tanker schedules and water filtration points',
+                  ),
+                ),
+              ],
+            ),
           ),
-          FilledButton.icon(
-            icon: const Icon(Icons.check),
-            label: const Text('Create Room'),
-            onPressed: () {
-              final rawName = nameCtrl.text.trim().replaceAll(' ', '-').toLowerCase();
-              final desc = descCtrl.text.trim();
-              if (rawName.isNotEmpty) {
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.check),
+              label: const Text('Create Room'),
+              onPressed: () {
+                final rawName = nameCtrl.text.trim().replaceAll(' ', '-').toLowerCase();
+                final desc = descCtrl.text.trim();
+                if (rawName.isEmpty) {
+                  setDialogState(() => errorText = 'Room name cannot be empty');
+                  return;
+                }
+                if (widget.state.rooms.any((r) => r.name.toLowerCase() == rawName)) {
+                  setDialogState(() => errorText = 'Room #$rawName already exists! Room names must be unique.');
+                  return;
+                }
                 final room = widget.state.createRoom(rawName, desc);
                 Navigator.pop(ctx);
                 if (room != null) {
@@ -156,11 +172,18 @@ class _ChatViewState extends State<ChatView> {
                       backgroundColor: Colors.teal,
                     ),
                   );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to create room #$rawName. A room with this name may already exist.'),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
                 }
-              }
-            },
-          ),
-        ],
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -501,6 +524,421 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
+  void _confirmAndClearChat(String channelId, String channelTitle) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent),
+            const SizedBox(width: 8),
+            Text('Clear #$channelTitle?'),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to clear all message history for "$channelTitle"?\n\nThis will permanently delete the messages stored in your local mesh database.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () {
+              Navigator.pop(ctx);
+              final ok = widget.state.clearChat(channelId);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(ok ? 'Chat history cleared for $channelTitle.' : 'Failed to clear chat history.'),
+                    backgroundColor: ok ? Colors.teal : Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text('Clear Chat', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showChatWindowContextMenu(BuildContext context, Offset position) {
+    final channel = widget.state.currentChannel;
+    final isDm = widget.state.isDirectMessageChannel(channel);
+    final dmPeer = isDm ? widget.state.getPeerForChannel(channel) : null;
+    final displayTitle = isDm ? (dmPeer?.nickname ?? channel) : channel;
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx + 1, position.dy + 1),
+      items: [
+        const PopupMenuItem<String>(
+          value: 'clear',
+          child: Row(
+            children: [
+              Icon(Icons.delete_sweep_outlined, color: Colors.redAccent, size: 20),
+              SizedBox(width: 12),
+              Text('Clear Chat History', style: TextStyle(color: Colors.redAccent)),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'bottom',
+          child: Row(
+            children: [
+              Icon(Icons.arrow_downward_rounded, size: 20),
+              SizedBox(width: 12),
+              Text('Scroll to Bottom'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'settings',
+          child: Row(
+            children: [
+              Icon(Icons.settings_outlined, size: 20),
+              SizedBox(width: 12),
+              Text('Channel Settings'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (!context.mounted) return;
+      if (value == 'clear') {
+        _confirmAndClearChat(channel, displayTitle);
+      } else if (value == 'bottom') {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      } else if (value == 'settings') {
+        _showChannelSettingsModal(context);
+      }
+    });
+  }
+
+  void _showChannelContextMenu(
+    BuildContext context,
+    Offset position,
+    String chId,
+    String chLabel, {
+    bool isDm = false,
+    String? peerHash,
+  }) {
+    final isMuted = widget.state.isChannelMuted(chId);
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx + 1, position.dy + 1),
+      items: [
+        PopupMenuItem<String>(
+          value: 'open',
+          child: Row(
+            children: [
+              const Icon(Icons.chat_bubble_outline, size: 18),
+              const SizedBox(width: 10),
+              Text('Switch to #$chLabel'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'mute',
+          child: Row(
+            children: [
+              Icon(isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined, size: 18),
+              const SizedBox(width: 10),
+              Text(isMuted ? 'Unmute Notifications' : 'Mute Notifications'),
+            ],
+          ),
+        ),
+        if (peerHash != null)
+          const PopupMenuItem<String>(
+            value: 'copy_hash',
+            child: Row(
+              children: [
+                Icon(Icons.copy_rounded, size: 18),
+                SizedBox(width: 10),
+                Text('Copy Peer Hash'),
+              ],
+            ),
+          ),
+        if (chId.startsWith('room_')) ...[
+          const PopupMenuItem<String>(
+            value: 'manage_room',
+            child: Row(
+              children: [
+                Icon(Icons.shield_outlined, color: Colors.indigo, size: 18),
+                SizedBox(width: 10),
+                Text('Governance / Stewards'),
+              ],
+            ),
+          ),
+          const PopupMenuItem<String>(
+            value: 'delete_room',
+            child: Row(
+              children: [
+                Icon(Icons.delete_forever, color: Colors.red, size: 18),
+                SizedBox(width: 10),
+                Text('Delete / Leave Room', style: TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+        ],
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'clear',
+          child: Row(
+            children: [
+              Icon(Icons.delete_sweep_outlined, color: Colors.redAccent, size: 18),
+              SizedBox(width: 10),
+              Text('Clear Chat History', style: TextStyle(color: Colors.redAccent)),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (!context.mounted) return;
+      if (value == 'open') {
+        widget.state.selectChannel(chId);
+      } else if (value == 'mute') {
+        widget.state.toggleMuteChannel(chId);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isMuted ? 'Unmuted #$chLabel' : 'Muted #$chLabel'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else if (value == 'manage_room') {
+        final room = widget.state.rooms.where((r) => r.id == chId).firstOrNull;
+        if (room != null) {
+          _showGovernanceDialog(room);
+        }
+      } else if (value == 'delete_room') {
+        _confirmAndDeleteRoom(chId, chLabel);
+      } else if (value == 'copy_hash' && peerHash != null) {
+        Clipboard.setData(ClipboardData(text: peerHash));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Peer hash copied to clipboard!'), duration: Duration(seconds: 2)),
+        );
+      } else if (value == 'clear') {
+        _confirmAndClearChat(chId, chLabel);
+      }
+    });
+  }
+
+  void _confirmAndDeleteRoom(String roomId, String roomName) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.red),
+            const SizedBox(width: 8),
+            Text('Delete Room #$roomName?'),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to delete and leave #$roomName?\n\nThis will permanently remove the room and all its messages locally and notify all mesh peers.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(ctx);
+              final success = widget.state.deleteRoom(roomId);
+              if (success) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Room #$roomName has been deleted.'),
+                    backgroundColor: Colors.red.shade700,
+                  ),
+                );
+              }
+            },
+            child: const Text('Delete Room'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showChannelSettingsModal(BuildContext context) {
+    final currentCh = widget.state.currentChannel;
+    final isDm = widget.state.isDirectMessageChannel(currentCh);
+    final dmPeer = isDm ? widget.state.getPeerForChannel(currentCh) : null;
+    final isCustomRoom = currentCh.startsWith('room_');
+    final room = isCustomRoom
+        ? widget.state.rooms.firstWhere(
+            (r) => r.id == currentCh,
+            orElse: () => RoomInfo(
+              id: '',
+              name: currentCh,
+              description: '',
+              creatorHash: '',
+              creatorNickname: '',
+              createdSec: 0,
+              isPrivate: false,
+              stewards: [],
+            ),
+          )
+        : null;
+    final title = isDm ? (dmPeer?.nickname ?? currentCh) : (room?.name ?? currentCh);
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (modalCtx, setModalState) {
+          final currentlyMuted = widget.state.isChannelMuted(currentCh);
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(isDm ? Icons.lock_outline : Icons.tag, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Channel Settings: #$title',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(modalCtx),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  SwitchListTile(
+                    title: const Text('Mute Channel Notifications'),
+                    subtitle: const Text('Suppress notification alerts and unread badges for this channel'),
+                    value: currentlyMuted,
+                    onChanged: (val) {
+                      widget.state.toggleMuteChannel(currentCh);
+                      setModalState(() {});
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent),
+                    title: const Text('Clear Chat History', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Delete all local messages from this channel'),
+                    onTap: () {
+                      Navigator.pop(modalCtx);
+                      _confirmAndClearChat(currentCh, title);
+                    },
+                  ),
+                  if (isDm && dmPeer != null) ...[
+                    ListTile(
+                      leading: Icon(
+                        widget.state.isUserBlocked(dmPeer.destHash) ? Icons.check_circle_outline : Icons.block,
+                        color: Colors.orange,
+                      ),
+                      title: Text(widget.state.isUserBlocked(dmPeer.destHash) ? 'Unblock User' : 'Block User'),
+                      subtitle: const Text('Drop messages from this peer'),
+                      onTap: () {
+                        widget.state.toggleBlockUser(dmPeer.destHash);
+                        Navigator.pop(modalCtx);
+                      },
+                    ),
+                  ],
+                  if (room != null && room.id.isNotEmpty) ...[
+                    ListTile(
+                      leading: const Icon(Icons.shield_outlined, color: Colors.indigo),
+                      title: const Text('Manage Stewards & Proposals'),
+                      subtitle: Text('${room.stewards.length} stewards active'),
+                      onTap: () {
+                        Navigator.pop(modalCtx);
+                        _showGovernanceDialog(room);
+                      },
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.delete_forever, color: Colors.red),
+                      title: const Text('Delete / Leave Room', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                      subtitle: const Text('Permanently remove this room and purge its messages'),
+                      onTap: () {
+                        Navigator.pop(modalCtx);
+                        _confirmAndDeleteRoom(room.id, room.name);
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showMessageContextMenu(BuildContext context, Offset position, ChatMessage msg) {
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx + 1, position.dy + 1),
+      items: [
+        const PopupMenuItem<String>(
+          value: 'copy_text',
+          child: Row(
+            children: [
+              Icon(Icons.content_copy_rounded, size: 18),
+              SizedBox(width: 10),
+              Text('Copy Message Text'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'copy_sender',
+          child: Row(
+            children: [
+              Icon(Icons.account_circle_outlined, size: 18),
+              SizedBox(width: 10),
+              Text('Copy Sender Hash'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'clear',
+          child: Row(
+            children: [
+              Icon(Icons.delete_sweep_outlined, color: Colors.redAccent, size: 18),
+              SizedBox(width: 10),
+              Text('Clear Chat History', style: TextStyle(color: Colors.redAccent)),
+            ],
+          ),
+        ),
+      ],
+    ).then((val) {
+      if (!context.mounted) return;
+      if (val == 'copy_text') {
+        Clipboard.setData(ClipboardData(text: msg.content));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message copied to clipboard!'), duration: Duration(seconds: 2)),
+        );
+      } else if (val == 'copy_sender') {
+        Clipboard.setData(ClipboardData(text: msg.senderHash));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sender hash copied to clipboard!'), duration: Duration(seconds: 2)),
+        );
+      } else if (val == 'clear') {
+        _confirmAndClearChat(widget.state.currentChannel, widget.state.currentChannel);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final messages = widget.state.currentMessages;
@@ -570,43 +1008,52 @@ class _ChatViewState extends State<ChatView> {
                         final color = ch['color'] as Color? ?? Theme.of(context).colorScheme.primary;
                         final unread = widget.state.getUnreadCount(ch['id'] as String);
 
-                        return ListTile(
-                          dense: true,
-                          selected: isSelected,
-                          selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
-                          leading: Icon(
-                            ch['icon'] as IconData,
-                            size: 18,
-                            color: isSelected ? color : Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                          title: Text(
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onSecondaryTapDown: (details) => _showChannelContextMenu(
+                            context,
+                            details.globalPosition,
+                            ch['id'] as String,
                             ch['label'] as String,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                              color: isSelected ? Theme.of(context).colorScheme.onSecondaryContainer : null,
-                            ),
                           ),
-                          trailing: unread > 0
-                              ? Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context).colorScheme.error,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Text(
-                                    '$unread',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
+                          child: ListTile(
+                            dense: true,
+                            selected: isSelected,
+                            selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                            leading: Icon(
+                              ch['icon'] as IconData,
+                              size: 18,
+                              color: isSelected ? color : Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                            title: Text(
+                              ch['label'] as String,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                color: isSelected ? Theme.of(context).colorScheme.onSecondaryContainer : null,
+                              ),
+                            ),
+                            trailing: unread > 0
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.error,
+                                      borderRadius: BorderRadius.circular(10),
                                     ),
-                                  ),
-                                )
-                              : null,
-                          onTap: () {
-                            widget.state.selectChannel(ch['id'] as String);
-                          },
+                                    child: Text(
+                                      '$unread',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  )
+                                : null,
+                            onTap: () {
+                              widget.state.selectChannel(ch['id'] as String);
+                            },
+                          ),
                         );
                       }),
                       if (rooms.isNotEmpty) ...[
@@ -627,52 +1074,61 @@ class _ChatViewState extends State<ChatView> {
                           final isSelected = widget.state.currentChannel == r.id;
                           final unread = widget.state.getUnreadCount(r.id);
 
-                          return ListTile(
-                            dense: true,
-                            selected: isSelected,
-                            selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
-                            leading: Icon(
-                              Icons.tag,
-                              size: 18,
-                              color: isSelected ? Colors.teal : Colors.grey,
-                            ),
-                            title: Text(
+                          return GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onSecondaryTapDown: (details) => _showChannelContextMenu(
+                              context,
+                              details.globalPosition,
+                              r.id,
                               r.name,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                              ),
                             ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (unread > 0) ...[
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context).colorScheme.error,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      '$unread',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
+                            child: ListTile(
+                              dense: true,
+                              selected: isSelected,
+                              selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                              leading: Icon(
+                                Icons.tag,
+                                size: 18,
+                                color: isSelected ? Colors.teal : Colors.grey,
+                              ),
+                              title: Text(
+                                r.name,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                ),
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (unread > 0) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context).colorScheme.error,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Text(
+                                        '$unread',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
                                     ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Text(
+                                    '${r.stewards.length}👑',
+                                    style: const TextStyle(fontSize: 11, color: Colors.grey),
                                   ),
-                                  const SizedBox(width: 6),
                                 ],
-                                Text(
-                                  '${r.stewards.length}👑',
-                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
-                                ),
-                              ],
+                              ),
+                              onTap: () {
+                                widget.state.selectChannel(r.id);
+                              },
                             ),
-                            onTap: () {
-                              widget.state.selectChannel(r.id);
-                            },
                           );
                         }),
                       ],
@@ -695,62 +1151,73 @@ class _ChatViewState extends State<ChatView> {
                           final isSelected = widget.state.currentChannel == dmChannel;
                           final unread = widget.state.getUnreadCount(dmChannel);
 
-                          return ListTile(
-                            dense: true,
-                            selected: isSelected,
-                            selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
-                            leading: Stack(
-                              children: [
-                                CircleAvatar(
-                                  radius: 12,
-                                  backgroundColor: Colors.blue.withValues(alpha: 0.15),
-                                  child: const Icon(Icons.lock_outline, size: 14, color: Colors.blue),
-                                ),
-                                Positioned(
-                                  right: 0,
-                                  bottom: 0,
-                                  child: Container(
-                                    width: 6,
-                                    height: 6,
-                                    decoration: const BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: Colors.green,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            title: Text(
+                          return GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onSecondaryTapDown: (details) => _showChannelContextMenu(
+                              context,
+                              details.globalPosition,
+                              dmChannel,
                               p.nickname,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                              ),
+                              isDm: true,
+                              peerHash: p.destHash,
                             ),
-                            subtitle: Text(
-                              '${p.destHash.length > 8 ? p.destHash.substring(0, 8) : p.destHash}...',
-                              style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.grey),
-                            ),
-                            trailing: unread > 0
-                                ? Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context).colorScheme.error,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      '$unread',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
+                            child: ListTile(
+                              dense: true,
+                              selected: isSelected,
+                              selectedTileColor: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                              leading: Stack(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 12,
+                                    backgroundColor: Colors.blue.withValues(alpha: 0.15),
+                                    child: const Icon(Icons.lock_outline, size: 14, color: Colors.blue),
+                                  ),
+                                  Positioned(
+                                    right: 0,
+                                    bottom: 0,
+                                    child: Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Colors.green,
                                       ),
                                     ),
-                                  )
-                                : null,
-                            onTap: () {
-                              widget.state.selectDirectMessage(p);
-                            },
+                                  ),
+                                ],
+                              ),
+                              title: Text(
+                                p.nickname,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${p.destHash.length > 8 ? p.destHash.substring(0, 8) : p.destHash}...',
+                                style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.grey),
+                              ),
+                              trailing: unread > 0
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context).colorScheme.error,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Text(
+                                        '$unread',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    )
+                                  : null,
+                              onTap: () {
+                                widget.state.selectDirectMessage(p);
+                              },
+                            ),
                           );
                         }),
                       ],
@@ -857,80 +1324,88 @@ class _ChatViewState extends State<ChatView> {
 
               // Messages
               Expanded(
-                child: messages.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.forum_outlined, size: 48, color: Theme.of(context).disabledColor),
-                            const SizedBox(height: 12),
-                            Text(
-                              'No messages in #${isCustomRoom ? currentRoom?.name : widget.state.currentChannel} yet.',
-                              style: TextStyle(color: Theme.of(context).disabledColor),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Say hello to nearby community participants!',
-                              style: TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) {
-                          final msg = messages[index];
-                          final isMe = msg.senderHash == myHash;
-
-                          return Align(
-                            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              constraints: const BoxConstraints(maxWidth: 520),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: isMe
-                                    ? Theme.of(context).colorScheme.primaryContainer
-                                    : Theme.of(context).colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(12),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onSecondaryTapDown: (details) => _showChatWindowContextMenu(context, details.globalPosition),
+                  child: messages.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.forum_outlined, size: 48, color: Theme.of(context).disabledColor),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No messages in #${isCustomRoom ? currentRoom?.name : widget.state.currentChannel} yet.',
+                                style: TextStyle(color: Theme.of(context).disabledColor),
                               ),
-                              child: Column(
-                                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
+                              const SizedBox(height: 4),
+                              const Text(
+                                'Say hello to nearby community participants! (Right-click to Clear Chat)',
+                                style: TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.all(16),
+                          itemCount: messages.length,
+                          itemBuilder: (context, index) {
+                            final msg = messages[index];
+                            final isMe = msg.senderHash == myHash;
+
+                            return Align(
+                              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onSecondaryTapDown: (details) => _showMessageContextMenu(context, details.globalPosition, msg),
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  constraints: const BoxConstraints(maxWidth: 520),
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: isMe
+                                        ? Theme.of(context).colorScheme.primaryContainer
+                                        : Theme.of(context).colorScheme.surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        isMe ? 'You' : msg.senderNickname,
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 12,
-                                          color: isMe
-                                              ? Theme.of(context).colorScheme.onPrimaryContainer
-                                              : Theme.of(context).colorScheme.primary,
-                                        ),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            isMe ? 'You' : msg.senderNickname,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                              color: isMe
+                                                ? Theme.of(context).colorScheme.onPrimaryContainer
+                                                : Theme.of(context).colorScheme.primary,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '(${msg.senderHash.length >= 8 ? msg.senderHash.substring(0, 8) : msg.senderHash})',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontFamily: 'monospace',
+                                              color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        '(${msg.senderHash.length >= 8 ? msg.senderHash.substring(0, 8) : msg.senderHash})',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontFamily: 'monospace',
-                                          color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                                        ),
-                                      ),
+                                      const SizedBox(height: 4),
+                                      _buildMessageContent(context, msg, isMe),
                                     ],
                                   ),
-                                  const SizedBox(height: 4),
-                                  _buildMessageContent(context, msg, isMe),
-                                ],
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
+                            );
+                          },
+                        ),
+                ),
               ),
 
               // Message Input Box
@@ -1024,6 +1499,11 @@ class _ChatViewState extends State<ChatView> {
                     ),
                     child: Row(
                       children: [
+                        IconButton(
+                          icon: const Icon(Icons.settings_outlined),
+                          tooltip: 'Channel Settings (Clear Chat, Mute)',
+                          onPressed: () => _showChannelSettingsModal(context),
+                        ),
                         IconButton(
                           icon: const Icon(Icons.attach_file_rounded),
                           tooltip: 'Attach & Publish File to Mesh',

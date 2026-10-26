@@ -46,6 +46,13 @@ class NeighborNetState extends ChangeNotifier {
   String? _barterFilterCategory;
   String? _barterFilterType;
 
+  final Set<String> _blockedUserHashes = {};
+  final Set<String> _restrictedUserHashes = {};
+  final Set<String> _squelchedUserHashes = {};
+  final Set<String> _mutedChannels = {};
+  final Map<String, List<String>> _userGroups = {};
+  final List<CommunityGroup> _communityGroups = [];
+
   String _currentChannel = 'general';
   String? _errorMessage;
 
@@ -76,6 +83,7 @@ class NeighborNetState extends ChangeNotifier {
   String? get barterFilterType => _barterFilterType;
 
   String get currentChannel => _currentChannel;
+  String get activeChannel => _currentChannel;
   String? get errorMessage => _errorMessage;
 
   List<SerialDeviceInfo> get serialPorts => _serialPorts;
@@ -111,9 +119,36 @@ class NeighborNetState extends ChangeNotifier {
     });
   }
 
+  Set<String> get blockedUserHashes => Set.unmodifiable(_blockedUserHashes);
+  Set<String> get restrictedUserHashes => Set.unmodifiable(_restrictedUserHashes);
+  Set<String> get squelchedUserHashes => Set.unmodifiable(_squelchedUserHashes);
+  Set<String> get mutedChannels => Set.unmodifiable(_mutedChannels);
+  Map<String, List<String>> get userGroups => Map.unmodifiable(_userGroups);
+  List<CommunityGroup> get communityGroups => List.unmodifiable(_communityGroups);
+
+  bool isUserBlocked(String hash) => _blockedUserHashes.contains(hash);
+  bool isUserRestricted(String hash) => _restrictedUserHashes.contains(hash);
+  bool isUserSquelched(String hash) => _squelchedUserHashes.contains(hash);
+  bool isChannelMuted(String channel) => _mutedChannels.contains(channel);
+  List<String> getGroupsForUser(String hash) => _userGroups[hash] ?? [];
+
+  bool clearChat(String channel) {
+    final success = _bridge.clearChatChannel(channel);
+    if (success) {
+      _channelMessages[channel] = [];
+      _unreadCounts[channel] = 0;
+      notifyListeners();
+    }
+    return success;
+  }
+
   List<ChatMessage> getDisplayMessages(String channel) {
     final raw = _channelMessages[channel] ?? [];
-    return raw.where((m) => !m.content.startsWith('[SIGNAL:')).toList();
+    return raw.where((m) {
+      if (m.content.startsWith('[SIGNAL:')) return false;
+      if (_blockedUserHashes.contains(m.senderHash)) return false;
+      return true;
+    }).toList();
   }
 
   bool isDirectMessageChannel(String channel) => channel.startsWith('dm_');
@@ -135,6 +170,7 @@ class NeighborNetState extends ChangeNotifier {
   Future<void> initialize({int port = 42424, bool isTransport = false}) async {
     try {
       await loadThemeProfile();
+      await _loadModerationAndGroups();
       final appDir = Directory(
         '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}NeighborNet',
       );
@@ -320,6 +356,9 @@ class NeighborNetState extends ChangeNotifier {
     _bulletins = _bridge.getBulletins();
     _sharedFiles = _bridge.getSharedFiles();
     _rooms = _bridge.getRooms();
+    if (_currentChannel.startsWith('room_') && !_rooms.any((r) => r.id == _currentChannel)) {
+      selectChannel('general');
+    }
     _markers = _bridge.getMarkers();
     _traceroutes = _bridge.getTraceroutes();
     if (_selectedTrace != null) {
@@ -400,6 +439,12 @@ class NeighborNetState extends ChangeNotifier {
           }
 
           if (!_isFirstRefresh && _status?.destHash != null && msg.senderHash != _status!.destHash) {
+            if (_blockedUserHashes.contains(msg.senderHash) ||
+                _squelchedUserHashes.contains(msg.senderHash) ||
+                _mutedChannels.contains(ch)) {
+              continue;
+            }
+
             if (ch != _currentChannel) {
               _unreadCounts[ch] = (_unreadCounts[ch] ?? 0) + 1;
             }
@@ -652,13 +697,32 @@ class NeighborNetState extends ChangeNotifier {
   }
 
   RoomInfo? createRoom(String name, [String description = '', bool isPrivate = false]) {
-    final meta = _bridge.createRoom(name, description, isPrivate: isPrivate);
+    final cleanName = name.trim().replaceAll(' ', '-').toLowerCase();
+    if (_rooms.any((r) => r.name.toLowerCase() == cleanName)) {
+      return null;
+    }
+    final meta = _bridge.createRoom(cleanName, description, isPrivate: isPrivate);
     if (meta != null) {
       _rooms = _bridge.getRooms();
       selectChannel(meta.id);
       return meta;
     }
     return null;
+  }
+
+  bool deleteRoom(String roomId) {
+    final success = _bridge.deleteRoom(roomId);
+    if (success) {
+      _rooms.removeWhere((r) => r.id == roomId);
+      _roomProposals.remove(roomId);
+      _roomAuditLogs.remove(roomId);
+      _channelMessages.remove(roomId);
+      if (_currentChannel == roomId) {
+        selectChannel('general');
+      }
+      notifyListeners();
+    }
+    return success;
   }
 
   bool proposeStewardVote({
@@ -1037,6 +1101,151 @@ class NeighborNetState extends ChangeNotifier {
   void refreshWebGatewayStatus() {
     _webGatewayStatus = _bridge.getWebGatewayStatus();
     notifyListeners();
+  }
+
+  Future<void> toggleBlockUser(String hash) async {
+    if (_blockedUserHashes.contains(hash)) {
+      _blockedUserHashes.remove(hash);
+    } else {
+      _blockedUserHashes.add(hash);
+    }
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> toggleRestrictUser(String hash) async {
+    if (_restrictedUserHashes.contains(hash)) {
+      _restrictedUserHashes.remove(hash);
+    } else {
+      _restrictedUserHashes.add(hash);
+    }
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> toggleSquelchUser(String hash) async {
+    if (_squelchedUserHashes.contains(hash)) {
+      _squelchedUserHashes.remove(hash);
+    } else {
+      _squelchedUserHashes.add(hash);
+    }
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> toggleMuteChannel(String channel) async {
+    if (_mutedChannels.contains(channel)) {
+      _mutedChannels.remove(channel);
+    } else {
+      _mutedChannels.add(channel);
+    }
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> setUserGroups(String hash, List<String> groups) async {
+    if (groups.isEmpty) {
+      _userGroups.remove(hash);
+    } else {
+      _userGroups[hash] = groups;
+    }
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> addCommunityGroup(CommunityGroup group) async {
+    _communityGroups.removeWhere((g) => g.id == group.id);
+    _communityGroups.add(group);
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> removeCommunityGroup(String groupId) async {
+    _communityGroups.removeWhere((g) => g.id == groupId);
+    await _saveModerationAndGroups();
+    notifyListeners();
+  }
+
+  Future<void> toggleGroupMembership(String groupId, String peerHash) async {
+    final index = _communityGroups.indexWhere((g) => g.id == groupId);
+    if (index != -1) {
+      final group = _communityGroups[index];
+      final members = List<String>.from(group.members);
+      if (members.contains(peerHash)) {
+        members.remove(peerHash);
+      } else {
+        members.add(peerHash);
+      }
+      _communityGroups[index] = CommunityGroup(
+        id: group.id,
+        name: group.name,
+        description: group.description,
+        isPrivate: group.isPrivate,
+        creatorHash: group.creatorHash,
+        members: members,
+        createdAtSec: group.createdAtSec,
+      );
+      await _saveModerationAndGroups();
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadModerationAndGroups() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final blocked = prefs.getStringList('neighbornet_blocked_users');
+      if (blocked != null) {
+        _blockedUserHashes.clear();
+        _blockedUserHashes.addAll(blocked);
+      }
+      final restricted = prefs.getStringList('neighbornet_restricted_users');
+      if (restricted != null) {
+        _restrictedUserHashes.clear();
+        _restrictedUserHashes.addAll(restricted);
+      }
+      final squelched = prefs.getStringList('neighbornet_squelched_users');
+      if (squelched != null) {
+        _squelchedUserHashes.clear();
+        _squelchedUserHashes.addAll(squelched);
+      }
+      final muted = prefs.getStringList('neighbornet_muted_channels');
+      if (muted != null) {
+        _mutedChannels.clear();
+        _mutedChannels.addAll(muted);
+      }
+      final groupsJson = prefs.getString('neighbornet_user_groups');
+      if (groupsJson != null) {
+        final decoded = jsonDecode(groupsJson) as Map<String, dynamic>;
+        _userGroups.clear();
+        decoded.forEach((key, val) {
+          if (val is List) {
+            _userGroups[key] = val.map((e) => e.toString()).toList();
+          }
+        });
+      }
+      final commGroupsJson = prefs.getString('neighbornet_community_groups');
+      if (commGroupsJson != null) {
+        final decoded = jsonDecode(commGroupsJson) as List<dynamic>;
+        _communityGroups.clear();
+        _communityGroups.addAll(decoded.map((e) => CommunityGroup.fromJson(e as Map<String, dynamic>)));
+      }
+    } catch (e) {
+      debugPrint('[NeighborNetState] Error loading moderation & groups: $e');
+    }
+  }
+
+  Future<void> _saveModerationAndGroups() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('neighbornet_blocked_users', _blockedUserHashes.toList());
+      await prefs.setStringList('neighbornet_restricted_users', _restrictedUserHashes.toList());
+      await prefs.setStringList('neighbornet_squelched_users', _squelchedUserHashes.toList());
+      await prefs.setStringList('neighbornet_muted_channels', _mutedChannels.toList());
+      await prefs.setString('neighbornet_user_groups', jsonEncode(_userGroups));
+      await prefs.setString('neighbornet_community_groups', jsonEncode(_communityGroups.map((g) => g.toJson()).toList()));
+    } catch (e) {
+      debugPrint('[NeighborNetState] Error saving moderation & groups: $e');
+    }
   }
 
   @override

@@ -1336,6 +1336,50 @@ class WebGatewayStatus {
   }
 }
 
+class CommunityGroup {
+  final String id;
+  final String name;
+  final String description;
+  final bool isPrivate;
+  final String creatorHash;
+  final List<String> members;
+  final int createdAtSec;
+
+  CommunityGroup({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.isPrivate,
+    required this.creatorHash,
+    required this.members,
+    required this.createdAtSec,
+  });
+
+  factory CommunityGroup.fromJson(Map<String, dynamic> json) {
+    return CommunityGroup(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      isPrivate: json['is_private'] as bool? ?? false,
+      creatorHash: json['creator_hash'] as String? ?? '',
+      members: (json['members'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [],
+      createdAtSec: (json['created_at_sec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'description': description,
+      'is_private': isPrivate,
+      'creator_hash': creatorHash,
+      'members': members,
+      'created_at_sec': createdAtSec,
+    };
+  }
+}
+
 
 
 

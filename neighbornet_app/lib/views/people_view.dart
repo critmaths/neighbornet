@@ -17,6 +17,7 @@ class PeopleView extends StatefulWidget {
 
 class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateMixin {
   int _viewMode = 0; // 0: List, 1: Radar / Topology Map
+  String _activeFilter = 'All';
   PeerInfo? _selectedPeer;
   late AnimationController _pulseController;
 
@@ -375,6 +376,388 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
     );
   }
 
+  void _showManageRelationshipDialog(BuildContext context, PeerInfo peer) {
+    final currentGroups = List<String>.from(widget.state.getGroupsForUser(peer.destHash));
+    const availableGroups = ['Friends', 'Family', 'Neighbors', 'Emergency Contacts'];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.group_add_outlined, color: Colors.teal),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Groups: ${peer.nickname}', overflow: TextOverflow.ellipsis),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Tag this user to organize your network and filter activity:',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 12),
+                ...availableGroups.map((grp) {
+                  final has = currentGroups.contains(grp);
+                  return CheckboxListTile(
+                    title: Text(grp, style: const TextStyle(fontSize: 14)),
+                    value: has,
+                    dense: true,
+                    onChanged: (val) {
+                      setDialogState(() {
+                        if (val == true) {
+                          currentGroups.add(grp);
+                        } else {
+                          currentGroups.remove(grp);
+                        }
+                      });
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                widget.state.setUserGroups(peer.destHash, currentGroups);
+                Navigator.pop(dialogCtx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Updated relationship tags for ${peer.nickname}')),
+                );
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showModerationActionsDialog(BuildContext context, PeerInfo peer) {
+    final isBlocked = widget.state.isUserBlocked(peer.destHash);
+    final isRestricted = widget.state.isUserRestricted(peer.destHash);
+    final isSquelched = widget.state.isUserSquelched(peer.destHash);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.security_outlined, color: Colors.redAccent),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Moderation: ${peer.nickname}', overflow: TextOverflow.ellipsis)),
+          ],
+        ),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(isBlocked ? Icons.check_circle_outline : Icons.block, color: Colors.redAccent),
+                title: Text(isBlocked ? 'Unblock User' : 'Block User'),
+                subtitle: const Text('Completely drop whispers and suppress notifications from this user'),
+                onTap: () {
+                  widget.state.toggleBlockUser(peer.destHash);
+                  Navigator.pop(ctx);
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: Icon(isRestricted ? Icons.visibility : Icons.visibility_off, color: Colors.orange),
+                title: Text(isRestricted ? 'Unrestrict User' : 'Restrict User'),
+                subtitle: const Text('Hide this user\'s presence and collapse their activity on the mesh'),
+                onTap: () {
+                  widget.state.toggleRestrictUser(peer.destHash);
+                  Navigator.pop(ctx);
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: Icon(isSquelched ? Icons.volume_up : Icons.volume_off, color: Colors.blueGrey),
+                title: Text(isSquelched ? 'Unsquelch / Unmute' : 'Squelch / Mute User'),
+                subtitle: const Text('Mute audio chatter and alerts from this user without blocking'),
+                onTap: () {
+                  widget.state.toggleSquelchUser(peer.destHash);
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCommunityGroupsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          final groups = widget.state.communityGroups;
+          return AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.groups_rounded, color: Colors.indigo),
+                const SizedBox(width: 8),
+                const Text('Community Groups'),
+                const Spacer(),
+                FilledButton.icon(
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Create Group'),
+                  onPressed: () {
+                    _showCreateCommunityGroupDialog(context, onCreated: () {
+                      setDialogState(() {});
+                    });
+                  },
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 520,
+              height: 400,
+              child: groups.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.diversity_3_outlined, size: 48, color: Theme.of(context).disabledColor),
+                          const SizedBox(height: 12),
+                          const Text('No community groups created yet.'),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Create Public or Private groups for dedicated sub-chats and identity profiles.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: groups.length,
+                      itemBuilder: (ctx, idx) {
+                        final g = groups[idx];
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: g.isPrivate ? Colors.purple.withValues(alpha: 0.15) : Colors.teal.withValues(alpha: 0.15),
+                              child: Icon(g.isPrivate ? Icons.lock : Icons.public, color: g.isPrivate ? Colors.purple : Colors.teal, size: 20),
+                            ),
+                            title: Row(
+                              children: [
+                                Text(g.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: g.isPrivate ? Colors.purple.withValues(alpha: 0.1) : Colors.teal.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    g.isPrivate ? 'PRIVATE' : 'PUBLIC',
+                                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: g.isPrivate ? Colors.purple : Colors.teal),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (g.description.isNotEmpty) Text(g.description, style: const TextStyle(fontSize: 12)),
+                                const SizedBox(height: 2),
+                                Text('${g.members.length} members', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              ],
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                                  tooltip: 'Open Group Chat',
+                                  onPressed: () {
+                                    Navigator.pop(dialogCtx);
+                                    widget.state.selectChannel('group_${g.id}');
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                  tooltip: 'Delete Group',
+                                  onPressed: () {
+                                    widget.state.removeCommunityGroup(g.id);
+                                    setDialogState(() {});
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showCreateCommunityGroupDialog(BuildContext context, {VoidCallback? onCreated}) {
+    final nameCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    bool isPrivate = false;
+    final selectedMembers = <String>{};
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.add_moderator, color: Colors.indigo),
+              SizedBox(width: 8),
+              Text('Create Community Group'),
+            ],
+          ),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Group Name',
+                      hintText: 'e.g., Neighborhood Watch, Medical Team',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Description',
+                      hintText: 'Purpose and operational scope of this group',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile(
+                    title: const Text('Private Group'),
+                    subtitle: const Text('Visible only to invited members'),
+                    value: isPrivate,
+                    onChanged: (val) {
+                      setDialogState(() {
+                        isPrivate = val;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('Select Members from Discovered Peers:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  ...widget.state.peers.map((p) {
+                    final isMember = selectedMembers.contains(p.destHash);
+                    return CheckboxListTile(
+                      dense: true,
+                      title: Text(p.nickname),
+                      subtitle: Text(p.destHash, style: const TextStyle(fontSize: 10, fontFamily: 'monospace')),
+                      value: isMember,
+                      onChanged: (val) {
+                        setDialogState(() {
+                          if (val == true) {
+                            selectedMembers.add(p.destHash);
+                          } else {
+                            selectedMembers.remove(p.destHash);
+                          }
+                        });
+                      },
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                final myHash = widget.state.status?.destHash ?? '';
+                final members = selectedMembers.toList();
+                if (myHash.isNotEmpty && !members.contains(myHash)) {
+                  members.add(myHash);
+                }
+                final newGroup = CommunityGroup(
+                  id: 'grp_${DateTime.now().millisecondsSinceEpoch}',
+                  name: name,
+                  description: descCtrl.text.trim(),
+                  isPrivate: isPrivate,
+                  creatorHash: myHash,
+                  members: members,
+                  createdAtSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                );
+                widget.state.addCommunityGroup(newGroup);
+                Navigator.pop(dialogCtx);
+                onCreated?.call();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Created community group "${newGroup.name}"!')),
+                );
+              },
+              child: const Text('Create Group'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<PeerInfo> _getFilteredPeers(List<PeerInfo> allPeers) {
+    if (_activeFilter == 'All') {
+      return allPeers.where((p) => !widget.state.isUserBlocked(p.destHash)).toList();
+    } else if (_activeFilter == 'Blocked') {
+      return allPeers.where((p) => widget.state.isUserBlocked(p.destHash)).toList();
+    } else if (_activeFilter == 'Restricted') {
+      return allPeers.where((p) => widget.state.isUserRestricted(p.destHash)).toList();
+    } else if (_activeFilter == 'Emergency') {
+      return allPeers.where((p) {
+        final grps = widget.state.getGroupsForUser(p.destHash);
+        return grps.contains('Emergency Contacts');
+      }).toList();
+    } else {
+      return allPeers.where((p) {
+        final grps = widget.state.getGroupsForUser(p.destHash);
+        return grps.contains(_activeFilter);
+      }).toList();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final peers = widget.state.peers;
@@ -529,12 +912,73 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
             ),
           ),
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+
+          // Relationship & Moderation Filter Bar + Community Groups Action
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilterChip(
+                label: Text('All (${peers.where((p) => !widget.state.isUserBlocked(p.destHash)).length})'),
+                selected: _activeFilter == 'All',
+                onSelected: (val) => setState(() => _activeFilter = 'All'),
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.people_outline, size: 16),
+                label: const Text('Friends'),
+                selected: _activeFilter == 'Friends',
+                onSelected: (val) => setState(() => _activeFilter = 'Friends'),
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.home_outlined, size: 16),
+                label: const Text('Family'),
+                selected: _activeFilter == 'Family',
+                onSelected: (val) => setState(() => _activeFilter = 'Family'),
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.location_city_outlined, size: 16),
+                label: const Text('Neighbors'),
+                selected: _activeFilter == 'Neighbors',
+                onSelected: (val) => setState(() => _activeFilter = 'Neighbors'),
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.medical_services_outlined, size: 16, color: Colors.redAccent),
+                label: const Text('Emergency'),
+                selected: _activeFilter == 'Emergency',
+                onSelected: (val) => setState(() => _activeFilter = 'Emergency'),
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.block_outlined, size: 16, color: Colors.red),
+                label: Text('Blocked (${widget.state.blockedUserHashes.length})'),
+                selected: _activeFilter == 'Blocked',
+                onSelected: (val) => setState(() => _activeFilter = 'Blocked'),
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.visibility_off_outlined, size: 16, color: Colors.orange),
+                label: Text('Restricted (${widget.state.restrictedUserHashes.length})'),
+                selected: _activeFilter == 'Restricted',
+                onSelected: (val) => setState(() => _activeFilter = 'Restricted'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.group_work_outlined, size: 16),
+                label: Text('Community Groups (${widget.state.communityGroups.length})'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () => _showCommunityGroupsDialog(context),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
 
           Expanded(
             child: _viewMode == 0
-                ? _buildListView(context, peers, now)
-                : _buildRadarView(context, peers, now),
+                ? _buildListView(context, _getFilteredPeers(peers), now)
+                : _buildRadarView(context, _getFilteredPeers(peers), now),
           ),
         ],
       ),
@@ -543,6 +987,27 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
 
   Widget _buildListView(BuildContext context, List<PeerInfo> peers, int now) {
     if (peers.isEmpty) {
+      if (widget.state.peers.isNotEmpty) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.filter_list_off_rounded, size: 40, color: Theme.of(context).colorScheme.outline),
+              const SizedBox(height: 12),
+              Text(
+                'No peers match the "$_activeFilter" filter.',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Reset Filter to All'),
+                onPressed: () => setState(() => _activeFilter = 'All'),
+              ),
+            ],
+          ),
+        );
+      }
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -572,13 +1037,21 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
       itemBuilder: (context, index) {
         final peer = peers[index];
         final secondsAgo = now.clamp(peer.lastSeenEpochSec, now) - peer.lastSeenEpochSec;
+        final userGroups = widget.state.getGroupsForUser(peer.destHash);
+        final isBlocked = widget.state.isUserBlocked(peer.destHash);
+        final isRestricted = widget.state.isUserRestricted(peer.destHash);
+        final isSquelched = widget.state.isUserSquelched(peer.destHash);
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
             side: BorderSide(
-              color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
+              color: isBlocked
+                  ? Colors.red.withValues(alpha: 0.5)
+                  : isRestricted
+                      ? Colors.orange.withValues(alpha: 0.5)
+                      : Theme.of(context).dividerColor.withValues(alpha: 0.2),
             ),
           ),
           child: ListTile(
@@ -588,15 +1061,20 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
               widget.state.getProfileForPeer(peer.destHash)?.avatarBase64 ?? '',
               peer.isTransport,
             ),
-            title: Row(
+            title: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
                   widget.state.getProfileForPeer(peer.destHash)?.nickname.isNotEmpty == true
                       ? widget.state.getProfileForPeer(peer.destHash)!.nickname
                       : peer.nickname,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    decoration: isBlocked ? TextDecoration.lineThrough : null,
+                  ),
                 ),
-                const SizedBox(width: 8),
                 if (widget.state.getProfileForPeer(peer.destHash)?.callsign.isNotEmpty == true)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -609,8 +1087,7 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
                       style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyan),
                     ),
                   ),
-                if (peer.isTransport) ...[
-                  const SizedBox(width: 6),
+                if (peer.isTransport)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
@@ -626,7 +1103,56 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
                       ),
                     ),
                   ),
-                ],
+                // Moderation Badges
+                if (isBlocked)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'BLOCKED',
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.red),
+                    ),
+                  ),
+                if (isRestricted)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'RESTRICTED',
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.orange),
+                    ),
+                  ),
+                if (isSquelched)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'MUTED',
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.amber),
+                    ),
+                  ),
+                // Relationship Tags
+                for (final g in userGroups)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      g,
+                      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Colors.blueAccent),
+                    ),
+                  ),
               ],
             ),
             subtitle: Column(
@@ -677,6 +1203,52 @@ class _PeopleViewState extends State<PeopleView> with SingleTickerProviderStateM
                       ),
                     );
                   },
+                ),
+                const SizedBox(width: 6),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert_rounded, size: 18),
+                  tooltip: 'Manage Peer Relations & Moderation',
+                  onSelected: (val) {
+                    if (val == 'relationship') {
+                      _showManageRelationshipDialog(context, peer);
+                    } else if (val == 'moderation') {
+                      _showModerationActionsDialog(context, peer);
+                    } else if (val == 'community_groups') {
+                      _showCommunityGroupsDialog(context);
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'relationship',
+                      child: Row(
+                        children: [
+                          Icon(Icons.label_outline_rounded, size: 16),
+                          SizedBox(width: 8),
+                          Text('Relationship & Tags...'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'moderation',
+                      child: Row(
+                        children: [
+                          Icon(Icons.shield_outlined, size: 16),
+                          SizedBox(width: 8),
+                          Text('Safety & Moderation...'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'community_groups',
+                      child: Row(
+                        children: [
+                          Icon(Icons.group_work_outlined, size: 16),
+                          SizedBox(width: 8),
+                          Text('Community Groups...'),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

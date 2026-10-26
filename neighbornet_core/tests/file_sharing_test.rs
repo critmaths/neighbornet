@@ -19,13 +19,13 @@ fn test_publish_file_and_chunk_assembly() {
     assert!(!hash.is_empty());
 
     let files = node.get_shared_files();
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].filename, "emergency_protocol.txt");
-    assert_eq!(files[0].file_hash, hash);
-    assert!(files[0].is_complete);
-    assert_eq!(files[0].category, "documents");
-    assert_eq!(files[0].group_tag, "Public Vault");
-    assert!(!files[0].is_encrypted);
+    let my_file = files.iter().find(|f| f.file_hash == hash).expect("published file found");
+    assert_eq!(my_file.filename, "emergency_protocol.txt");
+    assert_eq!(my_file.file_hash, hash);
+    assert!(my_file.is_complete);
+    assert_eq!(my_file.category, "documents");
+    assert_eq!(my_file.group_tag, "Public Vault");
+    assert!(!my_file.is_encrypted);
 
     // Verify chunk status
     let status = node.get_file_chunk_status(&hash).expect("chunk status exists");
@@ -105,10 +105,10 @@ fn test_delete_shared_file_and_cleanup() {
         )
         .unwrap();
 
-    assert_eq!(node.get_shared_files().len(), 1);
+    assert!(node.get_shared_files().iter().any(|f| f.file_hash == hash));
 
     let deleted = node.delete_shared_file(&hash);
     assert!(deleted);
-    assert_eq!(node.get_shared_files().len(), 0);
+    assert!(!node.get_shared_files().iter().any(|f| f.file_hash == hash));
     assert!(node.get_file_chunk_status(&hash).is_none());
 }

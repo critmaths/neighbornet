@@ -78,6 +78,11 @@ Copy-Item -Path "$FlutterReleaseDir\*" -Destination $StagingDir -Recurse -Force
 Copy-Item -Path $CoreDll -Destination $StagingDir -Force
 Copy-Item -Path $NodeExe -Destination $StagingDir -Force
 
+# Ensure assets directory (including app_icon.ico) is copied to staging root
+if (Test-Path "$AppDir\assets") {
+    Copy-Item -Path "$AppDir\assets" -Destination $StagingDir -Recurse -Force
+}
+
 # Create convenient Launcher Scripts
 $GuiBatchContent = @"
 @echo off

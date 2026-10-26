@@ -5,7 +5,7 @@ import 'package:neighbornet_app/state/neighbornet_state.dart';
 
 void main() {
   testWidgets('NeighborNet App UI smoke test', (WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.physicalSize = const Size(1280, 960);
     tester.view.devicePixelRatio = 1.0;
 
     final state = NeighborNetState();
@@ -29,7 +29,7 @@ void main() {
     expect(find.text('Walkie-Talkie (PTT)'), findsOneWidget);
     expect(find.text('Survival Manual'), findsOneWidget);
     expect(find.text('Emergency Mode'), findsOneWidget);
-    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('Preferences'), findsAtLeastNWidgets(1));
 
     // Switch to Bulletin view
     await tester.tap(find.text('Bulletin'));
@@ -69,8 +69,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('EMERGENCY MODE ACTIVE'), findsOneWidget);
 
-    // Switch to Settings view
-    await tester.tap(find.text('Settings'));
+    // Switch to Preferences view
+    await tester.tap(find.text('Preferences').last);
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Node & Network Settings'), findsOneWidget);
     expect(find.text('Sovereign Profile & Tactical Identity'), findsOneWidget);
